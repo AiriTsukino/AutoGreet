@@ -51,8 +51,13 @@ internal sealed class MainTab
             UiHelpers.TooltipOnHover("When enabled, None acts like a monitor-only mode: AutoGreet will still scan the current house or custom region for the doorbell and Visitors tab, but it will not populate Greets, queue anyone, or run greetings.");
             ImGui.Spacing();
             if (ImGui.Button("Settings##main-open-settings-no-venue")) openSettings();
-            ImGui.Spacing();
-            ImGui.TextDisabled($"Detection status: {detection.LastStatus}");
+
+            if (!config.MonitorWhenNoVenueSelected)
+            {
+                ImGui.Spacing();
+                ImGui.TextDisabled($"Detection status: {detection.LastStatus}");
+            }
+
             return;
         }
 
