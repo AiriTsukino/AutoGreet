@@ -137,6 +137,14 @@ public sealed class VisitorService
             DalamudServices.ChatGui.Print($"[AutoGreet] {key.Display} entered the monitored area.");
     }
 
+    private void NotifyPausedMonitorLeave(VisitorKey key)
+    {
+        if (!config.ActiveVenueDisabled || !config.MonitorWhenNoVenueSelected) return;
+
+        if (config.ChatNotificationsEnabled && config.LeaveChatNotificationsEnabled)
+            DalamudServices.ChatGui.Print($"[AutoGreet] {key.Display} left the monitored area.");
+    }
+
     public void OnPlayerEntered(VisitorKey key)
     {
         var venue = venues.ActiveVenueOrNull;
@@ -229,7 +237,11 @@ public sealed class VisitorService
     public void OnPlayerLeft(VisitorKey key)
     {
         var venue = venues.ActiveVenueOrNull;
-        if (venue is null) return;
+        if (venue is null)
+        {
+            NotifyPausedMonitorLeave(key);
+            return;
+        }
         var existing = venue.Session.NightlyVisitors.FirstOrDefault(v => SameKey(v.Key, key));
         if (existing is not null)
         {
