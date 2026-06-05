@@ -1,7 +1,7 @@
 {
   "Author": "Airi Tsukino",
   "Name": "AutoGreet",
-  "AssemblyVersion": "1.0.18.0",
+  "AssemblyVersion": "1.0.19.0",
   "Punchline": "Housing venue visitor queue and greeting assistant.",
   "IconUrl": "https://raw.githubusercontent.com/AiriTsukino/AutoGreet/main/AutoGreet/Resources/AGLogo.png",
   "Description": "Detects housing visitors, queues macro-style greetings, tracks sessions and lifetime visitors, and manages multiple venue profiles.",

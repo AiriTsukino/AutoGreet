@@ -47,6 +47,8 @@ public sealed class MainWindow : Window
     {
         var venue = venueService.ActiveVenueOrNull;
         var session = venue?.Session;
+        var tabBarScreenPos = ImGui.GetCursorScreenPos();
+
         if (ImGui.BeginTabBar("AutoGreetTabs"))
         {
             if (ImGui.BeginTabItem("Main##main")) { main.Draw(); ImGui.EndTabItem(); }
@@ -57,27 +59,37 @@ public sealed class MainWindow : Window
             if (ImGui.BeginTabItem($"Greets ({ungreetedCount}/{greetedCount})##greets")) { visitorsTab.Draw(); ImGui.EndTabItem(); }
             if (ImGui.BeginTabItem($"Visitors ({activeVisitorCount})##active-visitors")) { activeVisitorsTab.Draw(); ImGui.EndTabItem(); }
             if (ImGui.BeginTabItem($"Queue ({queueCount})##queue")) { queue.Draw(); ImGui.EndTabItem(); }
-            DrawSupportButtonOnTabRow();
             ImGui.EndTabBar();
         }
+
+        DrawSupportButtonOnTabRow(tabBarScreenPos);
     }
 
 
-    private static void DrawSupportButtonOnTabRow()
+    private static void DrawSupportButtonOnTabRow(Vector2 tabBarScreenPos)
     {
-        const string label = "      Support##autogreet-kofi-support";
-        var buttonWidth = MathF.Max(116f, ImGui.CalcTextSize("Support").X + 52f);
+        const string label = "##autogreet-kofi-support";
+        const string buttonText = "Support";
+        const float rightMargin = 12f;
+        const float topInset = 1f;
+        const float buttonHeight = 20f;
 
-        ImGui.SameLine();
-        var available = ImGui.GetContentRegionAvail().X;
-        if (available > buttonWidth + 8f)
-            ImGui.SetCursorPosX(ImGui.GetCursorPosX() + available - buttonWidth);
+        var buttonWidth = MathF.Max(116f, ImGui.CalcTextSize(buttonText).X + 52f);
+        var contentMax = ImGui.GetWindowContentRegionMax();
+        var windowPos = ImGui.GetWindowPos();
+        var buttonPos = new Vector2(windowPos.X + contentMax.X - buttonWidth - rightMargin, tabBarScreenPos.Y + topInset);
+
+        var savedCursor = ImGui.GetCursorScreenPos();
+        ImGui.SetCursorScreenPos(buttonPos);
 
         AutoGreetTheme.PushKofiButton();
-        var clicked = ImGui.Button(label, new Vector2(buttonWidth, 0));
+        var clicked = ImGui.Button(label, new Vector2(buttonWidth, buttonHeight));
         AutoGreetTheme.PopKofiButton();
 
-        DrawKofiCupIcon(ImGui.GetItemRectMin(), ImGui.GetItemRectMax());
+        var min = ImGui.GetItemRectMin();
+        var max = ImGui.GetItemRectMax();
+        DrawKofiCupIcon(min, max);
+        DrawSupportButtonText(min, max, buttonText);
 
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Support me on Ko-Fi");
@@ -97,24 +109,36 @@ public sealed class MainWindow : Window
                 DalamudServices.Log.Warning(ex, "AutoGreet failed to open Ko-Fi link.");
             }
         }
+
+        ImGui.SetCursorScreenPos(savedCursor);
+    }
+
+    private static void DrawSupportButtonText(Vector2 min, Vector2 max, string text)
+    {
+        var draw = ImGui.GetWindowDrawList();
+        var textSize = ImGui.CalcTextSize(text);
+        var textX = min.X + 40f;
+        var textY = min.Y + ((max.Y - min.Y - textSize.Y) * 0.5f);
+        var color = ImGui.GetColorU32(new Vector4(0.98f, 0.95f, 1.00f, 1f));
+        draw.AddText(new Vector2(textX, textY), color, text);
     }
 
     private static void DrawKofiCupIcon(Vector2 min, Vector2 max)
     {
         var draw = ImGui.GetWindowDrawList();
         var centerY = (min.Y + max.Y) * 0.5f;
-        var cupMin = new Vector2(min.X + 10f, centerY - 6f);
-        var cupMax = new Vector2(min.X + 25f, centerY + 6f);
+        var cupMin = new Vector2(min.X + 11f, centerY - 5f);
+        var cupMax = new Vector2(min.X + 25f, centerY + 5f);
         var color = ImGui.GetColorU32(new Vector4(0.96f, 0.91f, 1.00f, 1f));
         var shadow = ImGui.GetColorU32(new Vector4(0.20f, 0.07f, 0.36f, 0.9f));
         var heart = ImGui.GetColorU32(new Vector4(0.78f, 0.28f, 1.00f, 1f));
 
         draw.AddRectFilled(cupMin + new Vector2(1f, 1f), cupMax + new Vector2(1f, 1f), shadow, 3f);
         draw.AddRectFilled(cupMin, cupMax, color, 3f);
-        draw.AddRect(new Vector2(cupMax.X - 1f, centerY - 4f), new Vector2(cupMax.X + 6f, centerY + 4f), color, 4f, 0, 2f);
-        draw.AddCircleFilled(new Vector2(cupMin.X + 5f, centerY - 1f), 2f, heart);
-        draw.AddCircleFilled(new Vector2(cupMin.X + 8f, centerY - 1f), 2f, heart);
-        draw.AddTriangleFilled(new Vector2(cupMin.X + 3f, centerY), new Vector2(cupMin.X + 10f, centerY), new Vector2(cupMin.X + 6.5f, centerY + 4f), heart);
+        draw.AddRect(new Vector2(cupMax.X - 1f, centerY - 3.5f), new Vector2(cupMax.X + 5.5f, centerY + 3.5f), color, 4f, 0, 2f);
+        draw.AddCircleFilled(new Vector2(cupMin.X + 4.7f, centerY - 0.8f), 1.8f, heart);
+        draw.AddCircleFilled(new Vector2(cupMin.X + 7.9f, centerY - 0.8f), 1.8f, heart);
+        draw.AddTriangleFilled(new Vector2(cupMin.X + 3f, centerY), new Vector2(cupMin.X + 9.6f, centerY), new Vector2(cupMin.X + 6.3f, centerY + 3.6f), heart);
     }
 
 }
