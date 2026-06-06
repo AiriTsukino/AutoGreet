@@ -73,17 +73,19 @@ public sealed class MainWindow : Window
         const string settingsLabel = "Settings##autogreet-main-top-settings";
         const float rightMargin = 12f;
         const float buttonGap = 8f;
-        const float topInset = 1f;
+        const float topInset = 2f;
         const float buttonHeight = 20f;
+        const float settingsWidth = 94f;
 
         var supportWidth = MathF.Max(116f, ImGui.CalcTextSize(supportText).X + 52f);
-        var settingsWidth = MathF.Max(88f, ImGui.CalcTextSize("Settings").X + 28f);
         var contentMax = ImGui.GetWindowContentRegionMax();
         var windowPos = ImGui.GetWindowPos();
         var supportPos = new Vector2(windowPos.X + contentMax.X - supportWidth - rightMargin, tabBarScreenPos.Y + topInset);
         var settingsPos = new Vector2(supportPos.X - settingsWidth - buttonGap, supportPos.Y);
 
         var savedCursor = ImGui.GetCursorScreenPos();
+
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(8f, 3f));
 
         ImGui.SetCursorScreenPos(settingsPos);
         if (ImGui.Button(settingsLabel, new Vector2(settingsWidth, buttonHeight)))
@@ -95,6 +97,7 @@ public sealed class MainWindow : Window
         AutoGreetTheme.PushKofiButton();
         var clicked = ImGui.Button(supportLabel, new Vector2(supportWidth, buttonHeight));
         AutoGreetTheme.PopKofiButton();
+        ImGui.PopStyleVar();
 
         var min = ImGui.GetItemRectMin();
         var max = ImGui.GetItemRectMax();
