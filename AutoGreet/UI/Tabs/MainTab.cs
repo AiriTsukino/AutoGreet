@@ -49,9 +49,6 @@ internal sealed class MainTab
                 persistence.SaveNow();
             }
             UiHelpers.TooltipOnHover("When enabled, None acts like a monitor-only mode: AutoGreet will still scan the current house or custom region for the doorbell and Visitors tab, but it will not populate Greets, queue anyone, or run greetings.");
-            ImGui.Spacing();
-            if (ImGui.Button("Settings##main-open-settings-no-venue")) openSettings();
-
             if (!config.MonitorWhenNoVenueSelected)
             {
                 ImGui.Spacing();
@@ -66,8 +63,6 @@ internal sealed class MainTab
         var auto = config.AutoGreetEnabled;
         if (ImGui.Checkbox("Auto-greet enabled", ref auto)) { config.AutoGreetEnabled = auto; persistence.SaveNow(); if (auto) queue.EnqueueEligibleUngreeted(true); }
         UiHelpers.TooltipOnHover("Turning this on will automatically greet guests on the ungreeted list with the configured venue and macros.");
-        ImGui.SameLine();
-        if (ImGui.Button("Settings##main-open-settings")) openSettings();
         ImGui.SameLine();
         if (ImGui.Button("Reset Session##main-reset-session"))
         {

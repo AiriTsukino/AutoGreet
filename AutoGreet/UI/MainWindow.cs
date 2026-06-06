@@ -62,34 +62,44 @@ public sealed class MainWindow : Window
             ImGui.EndTabBar();
         }
 
-        DrawSupportButtonOnTabRow(tabBarScreenPos);
+        DrawTopRightButtonsOnTabRow(tabBarScreenPos);
     }
 
 
-    private static void DrawSupportButtonOnTabRow(Vector2 tabBarScreenPos)
+    private void DrawTopRightButtonsOnTabRow(Vector2 tabBarScreenPos)
     {
-        const string label = "##autogreet-kofi-support";
-        const string buttonText = "Support";
+        const string supportLabel = "##autogreet-kofi-support";
+        const string supportText = "Support";
+        const string settingsLabel = "Settings##autogreet-main-top-settings";
         const float rightMargin = 12f;
+        const float buttonGap = 8f;
         const float topInset = 1f;
         const float buttonHeight = 20f;
 
-        var buttonWidth = MathF.Max(116f, ImGui.CalcTextSize(buttonText).X + 52f);
+        var supportWidth = MathF.Max(116f, ImGui.CalcTextSize(supportText).X + 52f);
+        var settingsWidth = MathF.Max(88f, ImGui.CalcTextSize("Settings").X + 28f);
         var contentMax = ImGui.GetWindowContentRegionMax();
         var windowPos = ImGui.GetWindowPos();
-        var buttonPos = new Vector2(windowPos.X + contentMax.X - buttonWidth - rightMargin, tabBarScreenPos.Y + topInset);
+        var supportPos = new Vector2(windowPos.X + contentMax.X - supportWidth - rightMargin, tabBarScreenPos.Y + topInset);
+        var settingsPos = new Vector2(supportPos.X - settingsWidth - buttonGap, supportPos.Y);
 
         var savedCursor = ImGui.GetCursorScreenPos();
-        ImGui.SetCursorScreenPos(buttonPos);
 
+        ImGui.SetCursorScreenPos(settingsPos);
+        if (ImGui.Button(settingsLabel, new Vector2(settingsWidth, buttonHeight)))
+            openSettings();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Open AutoGreet settings");
+
+        ImGui.SetCursorScreenPos(supportPos);
         AutoGreetTheme.PushKofiButton();
-        var clicked = ImGui.Button(label, new Vector2(buttonWidth, buttonHeight));
+        var clicked = ImGui.Button(supportLabel, new Vector2(supportWidth, buttonHeight));
         AutoGreetTheme.PopKofiButton();
 
         var min = ImGui.GetItemRectMin();
         var max = ImGui.GetItemRectMax();
         DrawKofiCupIcon(min, max);
-        DrawSupportButtonText(min, max, buttonText);
+        DrawSupportButtonText(min, max, supportText);
 
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Support me on Ko-Fi");
