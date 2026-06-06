@@ -2,7 +2,13 @@
 
 AutoGreet is a Dalamud plugin for Final Fantasy XIV housing venues. It detects visitors in housing interiors and exteriors with use of custom regions, maintains per-venue visitor/session state, queues macro-style greetings, tracks greeted/ungreeted/skipped visitors and supports multiple venue profiles.
 
-Repo Link: `https://raw.githubusercontent.com/AiriTsukino/AutoGreet/main/pluginmaster.json`
+## Repo Link
+
+```text
+https://raw.githubusercontent.com/AiriTsukino/AutoGreet/main/pluginmaster.json
+```
+
+[Discord Server](https://discord.com/invite/HqyDz3SRbG)
 
 ## Features
 
