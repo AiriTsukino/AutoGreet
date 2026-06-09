@@ -19,6 +19,15 @@ public sealed class MainWindow : Window
     private readonly QueueTab queue;
     private readonly DetectionService detectionService;
     private readonly Action openSettings;
+    private MainWindowTab selectedTab = MainWindowTab.Main;
+
+    private enum MainWindowTab
+    {
+        Main,
+        Greets,
+        Visitors,
+        Queue,
+    }
 
     public MainWindow(Configuration config, VenueService venueService, VisitorService visitorService, QueueService queueService, DetectionService detectionService, PersistenceService persistence, Action openSettings)
         : base("AutoGreet###AutoGreetMainWindow", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoFocusOnAppearing)
@@ -45,26 +54,70 @@ public sealed class MainWindow : Window
 
     public override void Draw()
     {
+        // Use a small manual tab row instead of ImGui TabBar items. The visible
+        // counts can change whenever visitors enter/leave, but this selectedTab
+        // value only changes when the user clicks a tab, so live counts no
+        // longer make ImGui restore Main.
         var venue = venueService.ActiveVenueOrNull;
         var session = venue?.Session;
-        var tabBarScreenPos = ImGui.GetCursorScreenPos();
+        var ungreetedCount = session?.Ungreeted.Count ?? 0;
+        var greetedCount = session?.Greeted.Count ?? 0;
+        var activeVisitorCount = session?.NightlyVisitors.Count(v => v.Present) ?? (config.MonitorWhenNoVenueSelected ? detectionService.PresentKeys.Count : 0);
+        var queueCount = venue?.Queue.Count(q => q.Status == Models.QueueEntryStatus.Waiting) ?? 0;
 
-        if (ImGui.BeginTabBar("AutoGreetTabs"))
+        var tabRowScreenPos = ImGui.GetCursorScreenPos();
+
+        DrawTabButton("Main##autogreet-tab-main", MainWindowTab.Main);
+        ImGui.SameLine();
+        DrawTabButton($"Greets ({ungreetedCount}/{greetedCount})##autogreet-tab-greets", MainWindowTab.Greets);
+        ImGui.SameLine();
+        DrawTabButton($"Visitors ({activeVisitorCount})##autogreet-tab-visitors", MainWindowTab.Visitors);
+        ImGui.SameLine();
+        DrawTabButton($"Queue ({queueCount})##autogreet-tab-queue", MainWindowTab.Queue);
+
+        DrawTopRightButtonsOnTabRow(tabRowScreenPos);
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        switch (selectedTab)
         {
-            if (ImGui.BeginTabItem("Main##main")) { main.Draw(); ImGui.EndTabItem(); }
-            var ungreetedCount = session?.Ungreeted.Count ?? 0;
-            var greetedCount = session?.Greeted.Count ?? 0;
-            var activeVisitorCount = session?.NightlyVisitors.Count(v => v.Present) ?? (config.MonitorWhenNoVenueSelected ? detectionService.PresentKeys.Count : 0);
-            var queueCount = venue?.Queue.Count(q => q.Status == Models.QueueEntryStatus.Waiting) ?? 0;
-            if (ImGui.BeginTabItem($"Greets ({ungreetedCount}/{greetedCount})##greets")) { visitorsTab.Draw(); ImGui.EndTabItem(); }
-            if (ImGui.BeginTabItem($"Visitors ({activeVisitorCount})##active-visitors")) { activeVisitorsTab.Draw(); ImGui.EndTabItem(); }
-            if (ImGui.BeginTabItem($"Queue ({queueCount})##queue")) { queue.Draw(); ImGui.EndTabItem(); }
-            ImGui.EndTabBar();
+            case MainWindowTab.Greets:
+                visitorsTab.Draw();
+                break;
+            case MainWindowTab.Visitors:
+                activeVisitorsTab.Draw();
+                break;
+            case MainWindowTab.Queue:
+                queue.Draw();
+                break;
+            case MainWindowTab.Main:
+            default:
+                main.Draw();
+                break;
         }
-
-        DrawTopRightButtonsOnTabRow(tabBarScreenPos);
     }
 
+    private void DrawTabButton(string label, MainWindowTab tab)
+    {
+        var selected = selectedTab == tab;
+        var displayLabel = label.Split("##", StringSplitOptions.None)[0];
+        var width = MathF.Max(72f, ImGui.CalcTextSize(displayLabel).X + 22f);
+
+        if (selected)
+        {
+            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.39f, 0.20f, 0.58f, 1f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.45f, 0.24f, 0.66f, 1f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.32f, 0.16f, 0.50f, 1f));
+        }
+
+        if (ImGui.Button(label, new Vector2(width, 24f)))
+            selectedTab = tab;
+
+        if (selected)
+            ImGui.PopStyleColor(3);
+    }
 
     private void DrawTopRightButtonsOnTabRow(Vector2 tabBarScreenPos)
     {
@@ -73,8 +126,8 @@ public sealed class MainWindow : Window
         const string settingsLabel = "Settings##autogreet-main-top-settings";
         const float rightMargin = 12f;
         const float buttonGap = 8f;
-        const float topInset = 2f;
-        const float buttonHeight = 20f;
+        const float topInset = 0f;
+        const float buttonHeight = 24f;
         const float settingsWidth = 94f;
 
         var supportWidth = MathF.Max(116f, ImGui.CalcTextSize(supportText).X + 52f);
@@ -84,8 +137,6 @@ public sealed class MainWindow : Window
         var settingsPos = new Vector2(supportPos.X - settingsWidth - buttonGap, supportPos.Y);
 
         var savedCursor = ImGui.GetCursorScreenPos();
-
-        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(8f, 3f));
 
         ImGui.SetCursorScreenPos(settingsPos);
         if (ImGui.Button(settingsLabel, new Vector2(settingsWidth, buttonHeight)))
@@ -97,7 +148,6 @@ public sealed class MainWindow : Window
         AutoGreetTheme.PushKofiButton();
         var clicked = ImGui.Button(supportLabel, new Vector2(supportWidth, buttonHeight));
         AutoGreetTheme.PopKofiButton();
-        ImGui.PopStyleVar();
 
         var min = ImGui.GetItemRectMin();
         var max = ImGui.GetItemRectMax();
