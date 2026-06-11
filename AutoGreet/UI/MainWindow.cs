@@ -44,7 +44,7 @@ public sealed class MainWindow : Window
         };
         main = new MainTab(config, venueService, visitorService, queueService, detectionService, persistence, openSettings);
         visitorsTab = new VisitorsTab(venueService, visitorService, queueService);
-        activeVisitorsTab = new ActiveVisitorsTab(config, venueService, visitorService, queueService, detectionService);
+        activeVisitorsTab = new ActiveVisitorsTab(config, venueService, visitorService, queueService, detectionService, persistence);
         queue = new QueueTab(venueService);
     }
 
@@ -62,7 +62,15 @@ public sealed class MainWindow : Window
         var session = venue?.Session;
         var ungreetedCount = session?.Ungreeted.Count ?? 0;
         var greetedCount = session?.Greeted.Count ?? 0;
-        var activeVisitorCount = session?.NightlyVisitors.Count(v => v.Present) ?? (config.MonitorWhenNoVenueSelected ? detectionService.PresentKeys.Count : 0);
+        var activeVisitorCount = 0;
+        if (venue is not null && session is not null)
+        {
+            activeVisitorCount = session.NightlyVisitors.Count(v => v.Present && (config.ShowBlacklistedInActiveVisitors || !venue.Blacklist.Contains(v.Key.ToString())));
+        }
+        else if (config.MonitorWhenNoVenueSelected)
+        {
+            activeVisitorCount = detectionService.PresentKeys.Count;
+        }
         var queueCount = venue?.Queue.Count(q => q.Status == Models.QueueEntryStatus.Waiting) ?? 0;
 
         var tabRowScreenPos = ImGui.GetCursorScreenPos();

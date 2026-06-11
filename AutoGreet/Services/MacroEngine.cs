@@ -8,11 +8,13 @@ public sealed class MacroEngine
 {
     private static readonly Regex InlineWaitRegex = new(@"<wait\.(?<seconds>\d+(?:\.\d+)?)>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    private readonly Configuration config;
     private readonly GreetingService greetings;
     private readonly ChatCommandService chatCommands;
     private readonly TargetingService targeting;
-    public MacroEngine(GreetingService greetings, ChatCommandService chatCommands, TargetingService targeting)
+    public MacroEngine(Configuration config, GreetingService greetings, ChatCommandService chatCommands, TargetingService targeting)
     {
+        this.config = config;
         this.greetings = greetings;
         this.chatCommands = chatCommands;
         this.targeting = targeting;
@@ -49,7 +51,9 @@ public sealed class MacroEngine
 
                 if (line.StartsWith("/dote", StringComparison.OrdinalIgnoreCase))
                 {
-                    var targetedForEmote = await targeting.TargetAsync(target, token).ConfigureAwait(false);
+                    var targetedForEmote = config.WaitForVisibleTargetBeforeEmote
+                        ? await targeting.WaitForTargetAsync(target, stillPresent, config.EmoteTargetWaitSeconds, token).ConfigureAwait(false)
+                        : await targeting.TargetAsync(target, token).ConfigureAwait(false);
                     if (!targetedForEmote)
                         throw new InvalidOperationException($"Could not target visible player {target.Display} for /dote.");
                     await Task.Delay(200, token).ConfigureAwait(false);

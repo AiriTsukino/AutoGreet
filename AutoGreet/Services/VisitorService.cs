@@ -26,6 +26,7 @@ public sealed class VisitorService
         if (venue is null) return;
         if (venue.Blacklist.Contains(key.ToString()))
         {
+            EnsureBlacklistedSessionPresence(venue, key, hereWhenArrived: true, countVisit: false);
             if (config.ChatNotificationsEnabled && config.ChatNotificationsForBlacklistedEnabled)
                 DalamudServices.ChatGui.Print($"[AutoGreet] {key.Display} was already in {venue.Name} when you arrived.");
             return;
@@ -82,6 +83,7 @@ public sealed class VisitorService
         }
         if (venue.Blacklist.Contains(key.ToString()))
         {
+            EnsureBlacklistedSessionPresence(venue, key, hereWhenArrived: false, countVisit: true);
             if (config.DoorbellSoundEnabled)
                 sound.PlayDoorbell();
 
@@ -155,6 +157,7 @@ public sealed class VisitorService
         }
         if (venue.Blacklist.Contains(key.ToString()))
         {
+            EnsureBlacklistedSessionPresence(venue, key, hereWhenArrived: false, countVisit: true);
             if (config.DoorbellSoundEnabled)
                 sound.PlayDoorbell();
 
@@ -423,6 +426,46 @@ public sealed class VisitorService
         if (imported > 0 && config.ChatNotificationsEnabled)
             DalamudServices.ChatGui.Print($"[AutoGreet] Manual scan added {imported} visitor{(imported == 1 ? string.Empty : "s")} to the ungreeted list.");
         return imported;
+    }
+
+    private void EnsureBlacklistedSessionPresence(VenueProfile venue, VisitorKey key, bool hereWhenArrived, bool countVisit)
+    {
+        if (!config.ShowBlacklistedInActiveVisitors)
+            return;
+
+        var now = DateTimeOffset.UtcNow;
+        var session = venue.Session;
+        var existing = session.NightlyVisitors.FirstOrDefault(v => SameKey(v.Key, key));
+        var visitor = venue.LifetimeVisitors.TryGetValue(key.ToString(), out var existingVisitor) ? existingVisitor : Visitor.FromKey(key);
+
+        if (countVisit && (existing is null || !existing.Present))
+            visitor.TotalVisitCount++;
+
+        visitor.LastSeenUtc = now;
+        venue.LifetimeVisitors[key.ToString()] = visitor;
+
+        if (existing is null)
+        {
+            session.NightlyVisitors.Add(new SessionVisitorState
+            {
+                Key = key,
+                EnteredUtc = now,
+                LastSeenUtc = now,
+                ReturningThisSession = HasBeenGreetedBefore(visitor),
+                Present = true,
+                HereWhenArrived = hereWhenArrived,
+            });
+        }
+        else
+        {
+            existing.Present = true;
+            existing.LastSeenUtc = now;
+            existing.ReturningThisSession = HasBeenGreetedBefore(visitor);
+            if (hereWhenArrived)
+                existing.HereWhenArrived = true;
+        }
+
+        venues.RepairActiveVenueData();
     }
 
     private SessionVisitorState EnsureSessionVisitor(VisitorKey key)

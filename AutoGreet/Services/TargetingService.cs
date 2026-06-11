@@ -11,16 +11,47 @@ public sealed class TargetingService
     public async Task<bool> TargetAsync(VisitorKey target, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        return await DalamudServices.Framework.RunOnFrameworkThread(() => TargetOnFrameworkThread(target)).ConfigureAwait(false);
+        return await DalamudServices.Framework.RunOnFrameworkThread(() => TargetOnFrameworkThread(target, logMissing: true)).ConfigureAwait(false);
     }
 
-    private bool TargetOnFrameworkThread(VisitorKey target)
+    public async Task<bool> WaitForTargetAsync(VisitorKey target, Func<bool> stillPresent, float timeoutSeconds, CancellationToken token)
+    {
+        var timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 0.5f, 30f));
+        var deadline = DateTime.UtcNow + timeout;
+        var attempt = 0;
+
+        while (DateTime.UtcNow <= deadline)
+        {
+            token.ThrowIfCancellationRequested();
+
+            if (!stillPresent())
+            {
+                LastTargetStatus = $"Stopped waiting for {target.Display}; they left before the emote target was visible.";
+                return false;
+            }
+
+            attempt++;
+            var targeted = await DalamudServices.Framework.RunOnFrameworkThread(() => TargetOnFrameworkThread(target, logMissing: false)).ConfigureAwait(false);
+            if (targeted)
+                return true;
+
+            LastTargetStatus = $"Waiting for {target.Display} to load before emote target... ({attempt})";
+            await Task.Delay(250, token).ConfigureAwait(false);
+        }
+
+        LastTargetStatus = $"Timed out waiting for {target.Display} to load before emote target.";
+        DalamudServices.Log.Warning("AutoGreet timed out waiting for {Visitor} to become targetable for an emote.", target.Display);
+        return false;
+    }
+
+    private bool TargetOnFrameworkThread(VisitorKey target, bool logMissing)
     {
         var obj = FindPlayerObject(target);
         if (obj is null)
         {
             LastTargetStatus = $"Could not find visible player actor for {target.Display}.";
-            DalamudServices.Log.Warning("AutoGreet could not target {Visitor}: no matching player object found.", target.Display);
+            if (logMissing)
+                DalamudServices.Log.Warning("AutoGreet could not target {Visitor}: no matching player object found.", target.Display);
             return false;
         }
 

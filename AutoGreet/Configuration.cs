@@ -16,10 +16,13 @@ public sealed class Configuration : IPluginConfiguration
     public bool ChatNotificationsForBlacklistedEnabled { get; set; } = true;
     public bool LeaveChatNotificationsEnabled { get; set; } = false;
     public bool ResumePreviousEmoteEnabled { get; set; } = false;
+    public bool WaitForVisibleTargetBeforeEmote { get; set; } = true;
+    public float EmoteTargetWaitSeconds { get; set; } = 8.0f;
     public float GreetingStartDelaySeconds { get; set; } = 3.0f;
     public float QueueDelaySeconds { get; set; } = 3.0f;
     public Guid ActiveVenueId { get; set; }
     public bool ActiveVenueDisabled { get; set; }
     public bool MonitorWhenNoVenueSelected { get; set; } = false;
+    public bool ShowBlacklistedInActiveVisitors { get; set; } = true;
     public List<uint> CustomHousingTerritories { get; set; } = [];
 }

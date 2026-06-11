@@ -190,6 +190,26 @@ internal sealed class SettingsTab
         }
         UiHelpers.TooltipOnHover("After AutoGreet runs a manual greeting or queued auto-greeting, AutoGreet will try to resume the persistent emote you were doing before the greeting started. Example: if you were dancing with /beesknees, AutoGreet will try to start /beesknees again after the greeting finishes.");
 
+        var waitForTarget = config.WaitForVisibleTargetBeforeEmote;
+        if (ImGui.Checkbox("Wait for emote target to load", ref waitForTarget))
+        {
+            config.WaitForVisibleTargetBeforeEmote = waitForTarget;
+            persistence.SaveNow();
+        }
+        UiHelpers.TooltipOnHover("When enabled, AutoGreet waits for the visitor to be visible and targetable before running emotes like /dote <t>. This helps when someone enters but their character has not rendered on your screen yet.");
+
+        if (config.WaitForVisibleTargetBeforeEmote)
+        {
+            var waitSeconds = config.EmoteTargetWaitSeconds;
+            ImGui.SetNextItemWidth(180f);
+            if (ImGui.SliderFloat("Emote target wait seconds", ref waitSeconds, 1f, 30f, "%.0f sec"))
+            {
+                config.EmoteTargetWaitSeconds = Math.Clamp(waitSeconds, 1f, 30f);
+                persistence.SaveNow();
+            }
+            UiHelpers.TooltipOnHover("Maximum time AutoGreet will wait for the next greeted visitor to become visible before running an emote command. If they leave first, the greeting is cancelled normally.");
+        }
+
         // Resume emote diagnostic status is shown in the Diagnostics tab to keep General focused on settings only.
     }
 

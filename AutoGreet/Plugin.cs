@@ -39,7 +39,7 @@ public sealed class Plugin : IDalamudPlugin
         sound = new SoundService(config);
         targeting = new TargetingService();
         emoteResume = new EmoteResumeService(config, chatCommands);
-        macroEngine = new MacroEngine(greetings, chatCommands, targeting);
+        macroEngine = new MacroEngine(config, greetings, chatCommands, targeting);
         queue = new QueueService(config, venues, persistence, greetings, macroEngine, detection, emoteResume);
         visitors = new VisitorService(venues, persistence, queue, config, sound);
         greetings.AttachVisitorService(visitors);
