@@ -15,7 +15,10 @@ public sealed class DiagnosticLogService
     public static string SupportedSyntaxText =>
         "Supported macro syntax:\n" +
         "  /tell <t> message\n" +
+        "  /tell <playername> message\n" +
         "  /t <t> message\n" +
+        "  /t <playername> message\n" +
+        "  <playername> is replaced with Name@World.\n" +
         "  /dote <t>\n" +
         "  /wait 1, /wait.1, /wait1\n" +
         "  Inline waits such as <wait.1> or <wait.02> at the end of a supported line\n\n" +

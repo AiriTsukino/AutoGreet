@@ -48,10 +48,10 @@ internal sealed class VenuesTab
     {
         if (ImGui.TreeNodeEx($"Detection regions##venue-regions-{venue.Id}", ImGuiTreeNodeFlags.None))
         {
-            UiHelpers.TextDisabledWrapped("Optional: choose where this venue should ring the doorbell and where each visitor type becomes eligible for greeting. Default uses the whole house indoors, or any enabled custom region outdoors.");
+            UiHelpers.TextDisabledWrapped("Optional: choose where this venue tracks the visitor list and where each visitor type becomes eligible for greeting. Default uses the whole housing interior indoors, or any enabled custom region outdoors.");
 
-            DrawRegionCombo("Doorbell region", venue.DoorbellRegionId, id => venue.DoorbellRegionId = id,
-                "Controls chat/sound entry notifications. Default is the whole house in housing interiors, or any enabled custom region outdoors.");
+            DrawRegionCombo("Visitor list region", venue.VisitorListRegionId, id => venue.VisitorListRegionId = id,
+                "Controls who appears in the visitor list and entry notifications. Default is the whole housing interior indoors, or any enabled custom region outdoors.");
             DrawRegionCombo("First-time greeting region", venue.FirstTimeGreetingRegionId, id => venue.FirstTimeGreetingRegionId = id,
                 "First-time visitors are only added to Ungreeted when they enter this region. Default is the classic whole-house behavior.");
             DrawRegionCombo("Returning greeting region", venue.ReturningGreetingRegionId, id => venue.ReturningGreetingRegionId = id,

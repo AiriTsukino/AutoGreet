@@ -46,13 +46,23 @@ public sealed class QueueService : IDisposable
         if (forceStart || config.AutoGreetEnabled) EnsureWorker(forceStart);
     }
 
-    public void Enqueue(VisitorKey key, bool forceStart = false)
+    public void Enqueue(VisitorKey key, bool forceStart = false, bool? allowDetachedCustomGreeting = null)
     {
         var venue = venues.ActiveVenueOrNull;
         if (venue is null) return;
         if (venue.Blacklist.Contains(key.ToString())) return;
-        if (venue.Queue.Any(q => string.Equals(q.Visitor.ToString(), key.ToString(), StringComparison.OrdinalIgnoreCase) && q.Status is (QueueEntryStatus.Waiting or QueueEntryStatus.Running) && q.CustomRegionRouteId == Guid.Empty))
+        var existingActiveEntry = venue.Queue.FirstOrDefault(q => string.Equals(q.Visitor.ToString(), key.ToString(), StringComparison.OrdinalIgnoreCase) && q.Status is (QueueEntryStatus.Waiting or QueueEntryStatus.Running) && q.CustomRegionRouteId == Guid.Empty);
+        if (existingActiveEntry is not null)
         {
+            var existingDetachedCustomGreeting = allowDetachedCustomGreeting ?? detection.IsUsingCustomGreetingAreaFor(key);
+            if (existingDetachedCustomGreeting && !existingActiveEntry.AllowDetachedCustomGreeting)
+            {
+                existingActiveEntry.AllowDetachedCustomGreeting = true;
+                existingActiveEntry.StatusText = existingActiveEntry.Status == QueueEntryStatus.Waiting ? "Queued custom venue greeting" : existingActiveEntry.StatusText;
+                logs.Info("Custom venue greeting upgraded", $"Existing main active macro queue entry for {key.Display} was marked as a custom-region greeting, so leaving the region before send will not cancel it.");
+                persistence.SaveNow();
+            }
+
             if (forceStart) EnsureWorker(true);
             return;
         }
@@ -65,12 +75,17 @@ public sealed class QueueService : IDisposable
         var macro = greetings.PickMacro(key);
         if (macro is null) return;
 
+        var newDetachedCustomGreeting = allowDetachedCustomGreeting ?? detection.IsUsingCustomGreetingAreaFor(key);
+        if (newDetachedCustomGreeting)
+            logs.Info("Custom venue greeting queued", $"Queued main active macro '{macro.Name}' for {key.Display} from a custom greeting region. It will still send if the visitor leaves the region before the queue reaches them.");
+
         venue.Queue.Add(new QueueEntry
         {
             Visitor = key,
             GreetingProfileId = venue.ActiveGreetingProfileId,
             Category = macro.Category,
-            StatusText = "Queued"
+            AllowDetachedCustomGreeting = newDetachedCustomGreeting,
+            StatusText = newDetachedCustomGreeting ? "Queued custom venue greeting" : "Queued"
         });
         persistence.SaveNow();
         EnsureWorker(forceStart);
@@ -78,6 +93,8 @@ public sealed class QueueService : IDisposable
 
     public void EnqueueCustomRegionMacro(VisitorKey key, Guid routeId, Guid macroId)
     {
+        if (!config.AutoGreetEnabled) return;
+
         var venue = venues.ActiveVenueOrNull;
         if (venue is null) return;
         if (venue.Blacklist.Contains(key.ToString())) return;
@@ -95,6 +112,8 @@ public sealed class QueueService : IDisposable
             logs.Warning("Custom region macro missing", $"A custom region route for {venue.Name} points at a missing or disabled macro. Open Settings > Venues and select an enabled macro for the route.");
             return;
         }
+
+        logs.Info("Custom region macro queued", $"Queued custom region macro '{macro.Name}' for {key.Display}. Route: {routeId}.");
 
         venue.Queue.Add(new QueueEntry
         {
@@ -116,11 +135,30 @@ public sealed class QueueService : IDisposable
 
         foreach (var entry in venue.Queue.Where(q => string.Equals(q.Visitor.ToString(), key.ToString(), StringComparison.OrdinalIgnoreCase) && q.Status is (QueueEntryStatus.Waiting or QueueEntryStatus.Running)))
         {
+            if (entry.CustomRegionRouteId != Guid.Empty && IsNonBlockingCustomRegionCancelReason(reason))
+            {
+                logs.Info("Custom region macro kept queued", $"Kept custom region macro queued for {key.Display}. Reason ignored for custom-region sends: {reason}. Route: {entry.CustomRegionRouteId}.");
+                continue;
+            }
+
+            if (entry.CustomRegionRouteId == Guid.Empty && entry.AllowDetachedCustomGreeting && reason.Equals("Visitor left", StringComparison.OrdinalIgnoreCase))
+            {
+                logs.Info("Custom venue greeting kept queued", $"Kept main active macro queued for {key.Display}. Visitor left the custom region before sending, but the entry was already captured.");
+                continue;
+            }
+
             entry.Status = QueueEntryStatus.Cancelled;
             entry.StatusText = reason;
+            logs.Info("Queue entry cancelled", $"Queue entry for {key.Display} was cancelled. Reason: {reason}. Route: {(entry.CustomRegionRouteId == Guid.Empty ? "None" : entry.CustomRegionRouteId.ToString())}.");
         }
         persistence.SaveNow();
     }
+
+
+    private static bool IsNonBlockingCustomRegionCancelReason(string reason)
+        => reason.Equals("Visitor left", StringComparison.OrdinalIgnoreCase)
+           || reason.Equals("Skipped", StringComparison.OrdinalIgnoreCase)
+           || reason.Equals("Manually marked greeted", StringComparison.OrdinalIgnoreCase);
 
     public void EnsureWorker(bool forceStart = false)
     {
@@ -196,20 +234,40 @@ public sealed class QueueService : IDisposable
                     continue;
                 }
 
+                var isCustomRegionMacro = entry.CustomRegionRouteId != Guid.Empty;
+                var isDetachedCustomVenueGreeting = !isCustomRegionMacro && entry.AllowDetachedCustomGreeting;
                 entry.Status = QueueEntryStatus.Running;
-                entry.StatusText = "Starting";
+                entry.StatusText = isCustomRegionMacro
+                    ? "Starting custom region macro"
+                    : isDetachedCustomVenueGreeting
+                        ? "Starting custom venue greeting"
+                        : "Starting";
                 persistence.SaveNow();
 
                 try
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(config.GreetingStartDelaySeconds), token).ConfigureAwait(false);
+                    var startDelaySeconds = isCustomRegionMacro ? 0.1 : isDetachedCustomVenueGreeting ? Math.Min(config.GreetingStartDelaySeconds, 0.5f) : config.GreetingStartDelaySeconds;
+                    await Task.Delay(TimeSpan.FromSeconds(Math.Max(0, startDelaySeconds)), token).ConfigureAwait(false);
 
-                    // If the user manually marked/skipped/cancelled the visitor during the start delay,
-                    // do not continue running the macro on a stale queue entry.
+                    if (venue.Blacklist.Contains(entry.Visitor.ToString()))
+                        throw new OperationCanceledException("Visitor was blacklisted before greeting started.", token);
+
+                    // If the user manually marked/skipped/cancelled a normal venue greeting during the start delay,
+                    // do not continue running the macro on a stale queue entry. Custom-region macros are one-shot
+                    // messages and should still send even if the visitor leaves the region before the queue reaches them.
                     if (entry.Status != QueueEntryStatus.Running)
-                        throw new OperationCanceledException("Queue entry was cancelled before greeting started.", token);
+                    {
+                        if (!isCustomRegionMacro && !isDetachedCustomVenueGreeting)
+                            throw new OperationCanceledException("Queue entry was cancelled before greeting started.", token);
 
-                    if (entry.CustomRegionRouteId == Guid.Empty && (VenueService.ContainsKey(venue.Session.Greeted, entry.Visitor) || VenueService.ContainsKey(venue.Session.Skipped, entry.Visitor)))
+                        logs.Info(isCustomRegionMacro ? "Custom region macro resumed" : "Custom venue greeting resumed",
+                            $"Queue entry for {entry.Visitor.Display} was restored after a non-blocking cancel/update before sending. Route: {(entry.CustomRegionRouteId == Guid.Empty ? "Main custom venue" : entry.CustomRegionRouteId.ToString())}.");
+                        entry.Status = QueueEntryStatus.Running;
+                        entry.StatusText = isCustomRegionMacro ? "Starting custom region macro" : "Starting custom venue greeting";
+                        persistence.SaveNow();
+                    }
+
+                    if (!isCustomRegionMacro && (VenueService.ContainsKey(venue.Session.Greeted, entry.Visitor) || VenueService.ContainsKey(venue.Session.Skipped, entry.Visitor)))
                         throw new OperationCanceledException("Visitor was already greeted or skipped before greeting started.", token);
 
                     var macro = entry.MacroOverrideId != Guid.Empty
@@ -220,8 +278,26 @@ public sealed class QueueService : IDisposable
                         throw new InvalidOperationException("No enabled macro for visitor.");
 
                     var hasTell = greetings.MacroHasTell(macro);
-                    var markVisitorGreeted = entry.CustomRegionRouteId == Guid.Empty;
-                    await macroEngine.ExecuteAsync(entry.Visitor, macro, () => detection.IsPlayerVisible(entry.Visitor), token, markVisitorGreeted).ConfigureAwait(false);
+                    var markVisitorGreeted = !isCustomRegionMacro;
+
+                    if (isCustomRegionMacro)
+                    {
+                        logs.Info("Custom region macro starting", $"Starting custom region macro '{macro.Name}' for {entry.Visitor.Display}. Route: {entry.CustomRegionRouteId}. Target checks are skipped for custom region macros so /tell <playername> can message players outside targeting range.");
+                    }
+                    else if (isDetachedCustomVenueGreeting)
+                    {
+                        logs.Info("Custom venue greeting starting", $"Starting main active macro '{macro.Name}' for {entry.Visitor.Display} from a custom greeting region. Presence checks are skipped after queue capture so short region crossings still send.");
+                    }
+                    else
+                    {
+                        logs.Info("Queue macro starting", $"Starting macro '{macro.Name}' for {entry.Visitor.Display}.");
+                    }
+
+                    Func<bool> stillPresent = isCustomRegionMacro || isDetachedCustomVenueGreeting
+                        ? () => true
+                        : () => detection.IsPlayerVisible(entry.Visitor);
+
+                    await macroEngine.ExecuteAsync(entry.Visitor, macro, stillPresent, token, markVisitorGreeted).ConfigureAwait(false);
 
                     // RaptureShellModule sends native chat commands directly. Some Dalamud builds do not echo
                     // plugin-originated outgoing tells back through IChatGui.ChatMessage, so successful command
@@ -229,15 +305,29 @@ public sealed class QueueService : IDisposable
                     if (hasTell)
                     {
                         entry.StatusText = "Tell command sent";
+                        logs.Info("Tell command sent", $"Macro '{macro.Name}' sent a tell command for {entry.Visitor.Display}.");
                         persistence.SaveNow();
                     }
 
                     if (entry.CustomRegionRouteId != Guid.Empty)
+                    {
                         MarkCustomRegionGreeting(venue, entry.CustomRegionRouteId, entry.Visitor);
+                        logs.Info("Custom region macro completed", $"Completed custom region macro '{macro.Name}' for {entry.Visitor.Display}. Route: {entry.CustomRegionRouteId}.");
+                    }
+                    else if (isDetachedCustomVenueGreeting)
+                    {
+                        logs.Info("Custom venue greeting completed", $"Completed main active macro '{macro.Name}' for {entry.Visitor.Display} from a custom greeting region.");
+                    }
+                    else
+                    {
+                        logs.Info("Queue macro completed", $"Completed macro '{macro.Name}' for {entry.Visitor.Display}.");
+                    }
 
                     entry.Status = QueueEntryStatus.Completed;
                     entry.StatusText = entry.CustomRegionRouteId == Guid.Empty
-                        ? hasTell ? "Completed - tell sent" : "Completed"
+                        ? isDetachedCustomVenueGreeting
+                            ? hasTell ? "Completed custom venue greeting - tell sent" : "Completed custom venue greeting"
+                            : hasTell ? "Completed - tell sent" : "Completed"
                         : hasTell ? "Completed custom region macro - tell sent" : "Completed custom region macro";
                 }
                 catch (MacroSyntaxException ex)
@@ -249,15 +339,17 @@ public sealed class QueueService : IDisposable
                     DalamudServices.Log.Error(ex, "AutoGreet queue stopped because a macro had unsupported syntax.");
                     return;
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException ex)
                 {
                     entry.Status = QueueEntryStatus.Cancelled;
                     entry.StatusText = "Cancelled";
+                    logs.Info("Queue entry cancelled", $"Queue entry for {entry.Visitor.Display} was cancelled while processing. Reason: {ex.Message}. Route: {(entry.CustomRegionRouteId == Guid.Empty ? "None" : entry.CustomRegionRouteId.ToString())}.");
                 }
                 catch (Exception ex)
                 {
                     entry.Status = QueueEntryStatus.Failed;
                     entry.StatusText = ex.Message;
+                    logs.Warning("Queue entry failed", $"Queue entry for {entry.Visitor.Display} failed: {ex.Message}");
                     DalamudServices.Log.Error(ex, "AutoGreet queue failed.");
                 }
                 finally

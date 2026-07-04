@@ -21,6 +21,7 @@ public sealed class VenueProfile
     // Optional region routing. Guid.Empty means AutoGreet's default area:
     // whole housing interior when inside housing, or any enabled custom region in non-housing zones.
     public Guid DoorbellRegionId { get; set; }
+    public Guid VisitorListRegionId { get; set; }
     public Guid FirstTimeGreetingRegionId { get; set; }
     public Guid ReturningGreetingRegionId { get; set; }
     public Guid VipGreetingRegionId { get; set; }

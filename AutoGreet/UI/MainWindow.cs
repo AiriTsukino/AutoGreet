@@ -126,7 +126,12 @@ public sealed class MainWindow : Window
         }
     }
 
-    private void SelectLogTab() => selectLogTabNextDraw = true;
+    private void SelectLogTab()
+    {
+        var newest = logs.Entries.FirstOrDefault();
+        if (newest is not null && newest.Severity is Models.MacroLogSeverity.Warning or Models.MacroLogSeverity.Error)
+            selectLogTabNextDraw = true;
+    }
 
     private void DrawTabButton(string label, MainWindowTab tab)
     {

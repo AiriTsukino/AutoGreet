@@ -19,6 +19,7 @@ public sealed class QueueEntry
     public GreetingCategory Category { get; set; }
     public Guid MacroOverrideId { get; set; }
     public Guid CustomRegionRouteId { get; set; }
+    public bool AllowDetachedCustomGreeting { get; set; }
     public QueueEntryStatus Status { get; set; } = QueueEntryStatus.Waiting;
     public string StatusText { get; set; } = "Waiting";
 }

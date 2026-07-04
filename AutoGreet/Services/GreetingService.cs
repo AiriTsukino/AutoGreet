@@ -127,18 +127,33 @@ public sealed class GreetingService : IDisposable
         foreach (var raw in macro.Script.Split('\n'))
         {
             var line = InlineWaitRegex.Replace(raw.Trim(), string.Empty).Trim();
-            if (line.StartsWith("/tell <t>", StringComparison.OrdinalIgnoreCase))
+            if (TryReadTellLine(line, "/tell <t>", 9, out var tellText)
+                || TryReadTellLine(line, "/tell <playername>", 18, out tellText)
+                || TryReadTellLine(line, "/t <t>", 6, out tellText)
+                || TryReadTellLine(line, "/t <playername>", 15, out tellText))
             {
-                yield return line[9..].Trim();
-                continue;
+                yield return tellText;
             }
-
-            if (line.StartsWith("/t <t>", StringComparison.OrdinalIgnoreCase))
-                yield return line[6..].Trim();
         }
     }
 
-    public static string Normalize(string text) => string.Join(' ', text.Replace("<t>", string.Empty, StringComparison.OrdinalIgnoreCase).Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim();
+    private static bool TryReadTellLine(string line, string prefix, int messageStartIndex, out string tellText)
+    {
+        tellText = string.Empty;
+        if (!line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        tellText = line[messageStartIndex..].Trim();
+        return !string.IsNullOrWhiteSpace(tellText);
+    }
+
+    public static string Normalize(string text)
+    {
+        var normalized = text
+            .Replace("<t>", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace("<playername>", string.Empty, StringComparison.OrdinalIgnoreCase);
+        return string.Join(' ', normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim();
+    }
 
     public void Dispose() => DalamudServices.ChatGui.ChatMessage -= OnChatMessage;
 

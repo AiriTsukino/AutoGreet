@@ -114,6 +114,7 @@ public sealed class PersistenceService : IDisposable
                 ActiveVipMacroId = record.ActiveVipMacroId,
                 ActiveBlacklistedMacroId = record.ActiveBlacklistedMacroId,
                 DoorbellRegionId = record.DoorbellRegionId,
+                VisitorListRegionId = record.VisitorListRegionId != Guid.Empty ? record.VisitorListRegionId : record.DoorbellRegionId,
                 FirstTimeGreetingRegionId = record.FirstTimeGreetingRegionId,
                 ReturningGreetingRegionId = record.ReturningGreetingRegionId,
                 VipGreetingRegionId = record.VipGreetingRegionId,
@@ -151,6 +152,7 @@ public sealed class PersistenceService : IDisposable
                 ActiveVipMacroId = v.ActiveVipMacroId,
                 ActiveBlacklistedMacroId = v.ActiveBlacklistedMacroId,
                 DoorbellRegionId = v.DoorbellRegionId,
+                VisitorListRegionId = v.VisitorListRegionId,
                 FirstTimeGreetingRegionId = v.FirstTimeGreetingRegionId,
                 ReturningGreetingRegionId = v.ReturningGreetingRegionId,
                 VipGreetingRegionId = v.VipGreetingRegionId,
@@ -328,6 +330,7 @@ public sealed class PersistenceService : IDisposable
         public Guid ActiveVipMacroId { get; set; }
         public Guid ActiveBlacklistedMacroId { get; set; }
         public Guid DoorbellRegionId { get; set; }
+        public Guid VisitorListRegionId { get; set; }
         public Guid FirstTimeGreetingRegionId { get; set; }
         public Guid ReturningGreetingRegionId { get; set; }
         public Guid VipGreetingRegionId { get; set; }

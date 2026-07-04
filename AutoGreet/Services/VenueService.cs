@@ -181,6 +181,9 @@ public sealed class VenueService
         EnsureActiveMacroSelection(venue, GreetingCategory.Returning);
         EnsureActiveMacroSelection(venue, GreetingCategory.Vip);
         venue.ActiveBlacklistedMacroId = Guid.Empty;
+        if (venue.VisitorListRegionId == Guid.Empty && venue.DoorbellRegionId != Guid.Empty)
+            venue.VisitorListRegionId = venue.DoorbellRegionId;
+
         venue.PlotLock ??= new VenuePlotLock();
         RepairPlotLock(venue.PlotLock);
         RepairCustomRegionMacroRoutes(venue);

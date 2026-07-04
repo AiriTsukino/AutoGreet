@@ -33,13 +33,17 @@ public sealed class MacroEngine
     public async Task ExecuteAsync(VisitorKey target, GreetingMacro macro, Func<bool> stillPresent, CancellationToken token, bool markVisitorGreeted = true)
     {
         var parsedLines = ValidateAndParse(macro);
+        logs.Info("Macro execution started", $"Running macro '{macro.Name}' for {target.Display}. Parsed lines: {parsedLines.Count}.");
 
         foreach (var parsed in parsedLines)
         {
             token.ThrowIfCancellationRequested();
 
             if (!stillPresent())
+            {
+                logs.Warning("Macro target not present", $"Macro '{macro.Name}' stopped before sending the next command because {target.Display} was no longer present in the required detection area.");
                 throw new OperationCanceledException("Target left before greeting completed.", token);
+            }
 
             if (parsed.WaitOnlySeconds is not null)
             {
@@ -47,7 +51,7 @@ public sealed class MacroEngine
                 continue;
             }
 
-            var command = BuildCommand(parsed.Line, target, out var tellText);
+            var command = BuildCommand(parsed.Line, target, macro.Name, out var tellText);
             if (tellText is not null)
                 greetings.RegisterExpectedTell(target, tellText, markVisitorGreeted);
 
@@ -63,7 +67,9 @@ public sealed class MacroEngine
                 await Task.Delay(200, token).ConfigureAwait(false);
             }
 
+            logs.Info("Sending macro command", $"Macro '{macro.Name}' sending command for {target.Display}: {command}");
             await SendCommandAsync(command, token).ConfigureAwait(false);
+            logs.Info("Macro command sent", $"Macro '{macro.Name}' sent command for {target.Display}: {command}");
             if (tellText is not null)
                 greetings.ConfirmTellCommandSent(target, tellText);
 
@@ -174,19 +180,74 @@ public sealed class MacroEngine
             throw new InvalidOperationException($"Chat command was not sent: {chatCommands.LastError}");
     }
 
-    private static string BuildCommand(string line, VisitorKey target, out string? tellText)
+    private string BuildCommand(string line, VisitorKey target, string macroName, out string? tellText)
     {
         tellText = null;
-        var tellTarget = $"{target.Name}@{target.World}";
+        var tellTarget = BuildPlayerNameToken(target);
 
         if (TryGetTellText(line, out tellText))
-            return $"/tell {tellTarget} {tellText}";
+        {
+            var originalTellText = tellText ?? string.Empty;
+            tellText = ReplaceMacroVariables(originalTellText, target);
+            if (line.Contains("<playername>", StringComparison.OrdinalIgnoreCase) || originalTellText.Contains("<playername>", StringComparison.OrdinalIgnoreCase))
+                logs.Info("Macro variable replaced", $"Macro '{macroName}' resolved <playername> to '{tellTarget}' for {target.Display}.");
+
+            var command = $"/tell {tellTarget} {tellText}";
+            logs.Info("Tell target resolved", $"Macro '{macroName}' will send tell to '{tellTarget}' for {target.Display}.");
+            return command;
+        }
 
         if (IsDote(line))
             return "/dote <t>";
 
-        return line;
+        var commandLine = ReplaceMacroVariables(line, target);
+        if (line.Contains("<playername>", StringComparison.OrdinalIgnoreCase))
+            logs.Info("Macro variable replaced", $"Macro '{macroName}' resolved <playername> to '{tellTarget}' for {target.Display}.");
+
+        return commandLine;
     }
+
+    private static string BuildPlayerNameToken(VisitorKey target)
+    {
+        var name = NormalizePlayerName(target.Name, target.World);
+        var world = NormalizeWorldName(target.World);
+        return string.IsNullOrWhiteSpace(world) ? name : $"{name}@{world}";
+    }
+
+    private static string NormalizePlayerName(string name, string world)
+    {
+        var normalized = name.Trim();
+        var normalizedWorld = NormalizeWorldName(world);
+
+        if (!string.IsNullOrWhiteSpace(normalizedWorld))
+        {
+            var parenthesizedWorld = $"({normalizedWorld})";
+            if (normalized.EndsWith(parenthesizedWorld, StringComparison.OrdinalIgnoreCase))
+                normalized = normalized[..^parenthesizedWorld.Length].TrimEnd();
+        }
+
+        var atIndex = normalized.LastIndexOf('@');
+        if (atIndex > 0)
+            normalized = normalized[..atIndex].TrimEnd();
+
+        return normalized;
+    }
+
+    private static string NormalizeWorldName(string world)
+    {
+        var normalized = world.Trim();
+        if (normalized.StartsWith("(", StringComparison.Ordinal) && normalized.EndsWith(")", StringComparison.Ordinal) && normalized.Length > 2)
+            normalized = normalized[1..^1].Trim();
+
+        var atIndex = normalized.LastIndexOf('@');
+        if (atIndex >= 0 && atIndex < normalized.Length - 1)
+            normalized = normalized[(atIndex + 1)..].Trim();
+
+        return normalized.Trim('(', ')', ' ');
+    }
+
+    private static string ReplaceMacroVariables(string line, VisitorKey target)
+        => line.Replace("<playername>", BuildPlayerNameToken(target), StringComparison.OrdinalIgnoreCase);
 
     private static bool IsTellToTarget(string line) => TryGetTellText(line, out _);
 
@@ -194,19 +255,29 @@ public sealed class MacroEngine
     {
         tellText = null;
 
-        if (line.StartsWith("/tell <t>", StringComparison.OrdinalIgnoreCase))
-        {
-            tellText = line[9..].Trim();
-            return !string.IsNullOrWhiteSpace(tellText);
-        }
+        if (TryReadTellLine(line, "/tell <t>", 9, out tellText))
+            return true;
 
-        if (line.StartsWith("/t <t>", StringComparison.OrdinalIgnoreCase))
-        {
-            tellText = line[6..].Trim();
-            return !string.IsNullOrWhiteSpace(tellText);
-        }
+        if (TryReadTellLine(line, "/tell <playername>", 18, out tellText))
+            return true;
+
+        if (TryReadTellLine(line, "/t <t>", 6, out tellText))
+            return true;
+
+        if (TryReadTellLine(line, "/t <playername>", 15, out tellText))
+            return true;
 
         return false;
+    }
+
+    private static bool TryReadTellLine(string line, string prefix, int messageStartIndex, out string? tellText)
+    {
+        tellText = null;
+        if (!line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        tellText = line[messageStartIndex..].Trim();
+        return !string.IsNullOrWhiteSpace(tellText);
     }
 
     private static bool IsDote(string line)

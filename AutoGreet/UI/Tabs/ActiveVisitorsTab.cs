@@ -41,7 +41,7 @@ internal sealed class ActiveVisitorsTab
             .ToList();
 
         DrawActiveVisitorsHeader(activeVisitors.Count);
-        UiHelpers.TextDisabledWrapped("Shows people currently detected in the active venue area. This follows the venue's doorbell detection area, so a whole-house doorbell region acts as a whole-house active player count.");
+        UiHelpers.TextDisabledWrapped("Shows people currently detected in the active venue area. This follows the venue's visitor list region, so the default housing interior acts as a whole-house active player count.");
 
         if (activeVisitors.Count == 0)
         {
@@ -95,7 +95,7 @@ internal sealed class ActiveVisitorsTab
     {
         if (!config.MonitorWhenNoVenueSelected)
         {
-            UiHelpers.TextDisabledWrapped("No active venue is selected. Visitor tracking is paused. Enable monitor-only mode on the Main tab to keep the doorbell and active Visitors tab running while no venue is selected.");
+            UiHelpers.TextDisabledWrapped("No active venue is selected. Visitor tracking is paused. Enable monitor-only mode on the Main tab to keep visitor tracking and entry alerts running while no venue is selected.");
             return;
         }
 
@@ -107,7 +107,7 @@ internal sealed class ActiveVisitorsTab
             .ToList();
 
         DrawActiveVisitorsHeader(activeVisitors.Count, showOption: false);
-        UiHelpers.TextDisabledWrapped("Monitor-only mode is enabled. This tab shows people currently detected in the house or enabled custom region, and the doorbell can still fire. Greets, queueing, and auto-greetings remain paused because no venue is selected.");
+        UiHelpers.TextDisabledWrapped("Monitor-only mode is enabled. This tab shows people currently detected in the house or enabled custom region, and entry alerts can still fire. Greets, queueing, and auto-greetings remain paused because no venue is selected.");
 
         if (activeVisitors.Count == 0)
         {

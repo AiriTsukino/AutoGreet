@@ -42,13 +42,13 @@ internal sealed class MainTab
 
             UiHelpers.TextDisabledWrapped("No active venue is selected. Greeting lists, queueing, and auto-greetings are paused until you select a venue again.");
             var monitor = config.MonitorWhenNoVenueSelected;
-            if (ImGui.Checkbox("Keep doorbell and active Visitors tab enabled while paused", ref monitor))
+            if (ImGui.Checkbox("Keep entry alerts and active Visitors tab enabled while paused", ref monitor))
             {
                 config.MonitorWhenNoVenueSelected = monitor;
                 detection.ClearPresenceCache();
                 persistence.SaveNow();
             }
-            UiHelpers.TooltipOnHover("When enabled, None acts like a monitor-only mode: AutoGreet will still scan the current house or custom region for the doorbell and Visitors tab, but it will not populate Greets, queue anyone, or run greetings.");
+            UiHelpers.TooltipOnHover("When enabled, None acts like a monitor-only mode: AutoGreet will still scan the current house or custom region for entry alerts and the Visitors tab, but it will not populate Greets, queue anyone, or run greetings.");
             if (!config.MonitorWhenNoVenueSelected)
             {
                 ImGui.Spacing();

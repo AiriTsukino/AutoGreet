@@ -43,7 +43,7 @@ public sealed class Plugin : IDalamudPlugin
         logs = new DiagnosticLogService();
         macroEngine = new MacroEngine(config, greetings, chatCommands, targeting, logs);
         queue = new QueueService(config, venues, persistence, greetings, macroEngine, detection, emoteResume, logs);
-        visitors = new VisitorService(venues, persistence, queue, config, sound);
+        visitors = new VisitorService(venues, persistence, queue, detection, config, sound, logs);
         greetings.AttachVisitorService(visitors);
 
         detection.PlayerEntered += visitors.OnPlayerEntered;

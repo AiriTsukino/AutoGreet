@@ -138,6 +138,9 @@ public sealed class DetectionService : IDisposable
             foreach (var existing in doorbellCurrent)
                 if (VisitorKey.TryParse(existing, out var key)) PlayerPresentOnArrival?.Invoke(key);
 
+            if (!config.ActiveVenueDisabled)
+                NotifyCustomRegionRouteCurrent(routeCurrent);
+
             var baselineMode = config.ActiveVenueDisabled ? "paused monitor" : "active venue";
             LastStatus = $"Baseline captured for territory {CurrentTerritoryType}. Source: {GetSourceText(inHousing, housingManagerInside, useCustomRegions, venue)}. Mode: {baselineMode}. Player actors: {seenPlayers}, doorbell present: {present.Count}, greeting-area present: {greetingPresent.Count}.";
             return;
@@ -147,6 +150,9 @@ public sealed class DetectionService : IDisposable
         {
             foreach (var existing in doorbellCurrent)
                 if (VisitorKey.TryParse(existing, out var key)) PlayerPresentOnArrival?.Invoke(key);
+
+            if (!config.ActiveVenueDisabled)
+                NotifyCustomRegionRouteCurrent(routeCurrent);
         }
 
         var greetingEntered = greetingCurrent.Except(greetingPresent, StringComparer.OrdinalIgnoreCase).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -339,10 +345,34 @@ public sealed class DetectionService : IDisposable
             var world = GetWorldName(pc);
             if (!world.Equals(key.World, StringComparison.OrdinalIgnoreCase)) continue;
 
-            return IsInDefaultDetectionArea(pc.Position, inHousing, activeRegions) || IsInDoorbellArea(venue, pc.Position, inHousing, activeRegions);
+            return IsInGreetingArea(venue, key, pc.Position, inHousing, activeRegions)
+                   || IsInDoorbellArea(venue, pc.Position, inHousing, activeRegions)
+                   || IsInDefaultDetectionArea(pc.Position, inHousing, activeRegions);
         }
 
         return false;
+    }
+
+    public bool IsUsingCustomGreetingAreaFor(VisitorKey key)
+    {
+        var venue = GetActiveVenue();
+        if (venue is null)
+            return false;
+
+        var territory = CurrentTerritoryType != 0
+            ? CurrentTerritoryType
+            : DalamudServices.ClientState.TerritoryType;
+
+        var regionId = GetGreetingRegionId(venue, key);
+        if (regionId != Guid.Empty)
+            return persistence.CustomRegions.Any(r => r.Id == regionId && r.TerritoryType == territory);
+
+        var territoryMatched = HousingDetector.IsHousingInterior(territory, config.CustomHousingTerritories);
+        var inHousing = IsInHousingInterior || territoryMatched || HousingDetector.IsHousingManagerInside();
+        if (inHousing)
+            return false;
+
+        return persistence.CustomRegions.Any(r => r.TerritoryType == territory && r.Enabled);
     }
 
     private VenueProfile? GetActiveVenue()
@@ -410,6 +440,19 @@ public sealed class DetectionService : IDisposable
         return result;
     }
 
+
+    private void NotifyCustomRegionRouteCurrent(Dictionary<Guid, HashSet<string>> routeCurrent)
+    {
+        foreach (var (routeId, current) in routeCurrent)
+        {
+            foreach (var keyText in current)
+            {
+                if (VisitorKey.TryParse(keyText, out var key))
+                    PlayerCustomRegionMacroEntered?.Invoke(key, routeId);
+            }
+        }
+    }
+
     private void ReplaceCustomRegionPresence(Dictionary<Guid, HashSet<string>> routeCurrent)
     {
         customRegionPresent.Clear();
@@ -419,15 +462,26 @@ public sealed class DetectionService : IDisposable
 
     private bool IsInDoorbellArea(VenueProfile? venue, Vector3 position, bool inHousing, IReadOnlyList<CustomDetectionRegion> activeRegions)
     {
-        if (venue is not null && venue.DoorbellRegionId != Guid.Empty)
+        var visitorListRegionId = GetVisitorListRegionId(venue);
+        if (visitorListRegionId != Guid.Empty)
         {
-            var selected = persistence.CustomRegions.FirstOrDefault(r => r.Id == venue.DoorbellRegionId && r.TerritoryType == CurrentTerritoryType);
+            var selected = persistence.CustomRegions.FirstOrDefault(r => r.Id == visitorListRegionId && r.TerritoryType == CurrentTerritoryType);
             return selected is null
                 ? IsInDefaultDetectionArea(position, inHousing, activeRegions)
                 : selected.Enabled && selected.Contains(position);
         }
 
         return IsInDefaultDetectionArea(position, inHousing, activeRegions);
+    }
+
+    private static Guid GetVisitorListRegionId(VenueProfile? venue)
+    {
+        if (venue is null)
+            return Guid.Empty;
+
+        return venue.VisitorListRegionId != Guid.Empty
+            ? venue.VisitorListRegionId
+            : venue.DoorbellRegionId;
     }
 
     private bool IsInGreetingArea(VenueProfile? venue, VisitorKey key, Vector3 position, bool inHousing, IReadOnlyList<CustomDetectionRegion> activeRegions)
@@ -472,7 +526,7 @@ public sealed class DetectionService : IDisposable
 
     private static string GetSourceText(bool inHousing, bool housingManagerInside, bool useCustomRegions, VenueProfile? venue)
     {
-        var doorbell = venue is not null && venue.DoorbellRegionId != Guid.Empty ? ", doorbell region override" : string.Empty;
+        var doorbell = GetVisitorListRegionId(venue) != Guid.Empty ? ", visitor list region override" : string.Empty;
         var greeting = venue is not null && (venue.FirstTimeGreetingRegionId != Guid.Empty || venue.ReturningGreetingRegionId != Guid.Empty || venue.VipGreetingRegionId != Guid.Empty)
             ? ", greeting region routing"
             : string.Empty;

@@ -7,16 +7,20 @@ public sealed class VisitorService
     private readonly VenueService venues;
     private readonly PersistenceService persistence;
     private readonly QueueService queue;
+    private readonly DetectionService detection;
     private readonly Configuration config;
     private readonly SoundService sound;
+    private readonly DiagnosticLogService logs;
 
-    public VisitorService(VenueService venues, PersistenceService persistence, QueueService queue, Configuration config, SoundService sound)
+    public VisitorService(VenueService venues, PersistenceService persistence, QueueService queue, DetectionService detection, Configuration config, SoundService sound, DiagnosticLogService logs)
     {
         this.venues = venues;
         this.persistence = persistence;
         this.queue = queue;
+        this.detection = detection;
         this.config = config;
         this.sound = sound;
+        this.logs = logs;
     }
 
 
@@ -169,6 +173,9 @@ public sealed class VisitorService
         var session = venue.Session;
         var existing = session.NightlyVisitors.FirstOrDefault(v => SameKey(v.Key, key));
         var alreadyPresentFromDoorbell = existing?.Present == true;
+        var customVenueGreeting = detection.IsUsingCustomGreetingAreaFor(key);
+        if (customVenueGreeting)
+            logs.Info("Custom venue greeting detected", $"{key.Display} entered the configured custom greeting region for {venue.Name}. Main active macro eligibility will be queued if this visitor has not already been greeted or skipped this session.");
 
         var wasKnown = venue.LifetimeVisitors.TryGetValue(key.ToString(), out var visitor);
         visitor ??= Visitor.FromKey(key);
@@ -203,7 +210,7 @@ public sealed class VisitorService
                 session.Ungreeted.Add(key);
 
             if (config.AutoGreetEnabled && !VenueService.ContainsKey(session.Greeted, key) && !VenueService.ContainsKey(session.Skipped, key))
-                queue.Enqueue(key);
+                queue.Enqueue(key, allowDetachedCustomGreeting: customVenueGreeting);
         }
         else
         {
@@ -219,16 +226,18 @@ public sealed class VisitorService
                     session.Ungreeted.Add(key);
 
                 if (config.AutoGreetEnabled)
-                    queue.Enqueue(key);
+                    queue.Enqueue(key, allowDetachedCustomGreeting: customVenueGreeting);
             }
             else if (!VenueService.ContainsKey(session.Greeted, key) && !VenueService.ContainsKey(session.Skipped, key) && !VenueService.ContainsKey(session.Ungreeted, key))
             {
                 session.Ungreeted.Add(key);
                 if (config.AutoGreetEnabled)
-                    queue.Enqueue(key);
+                    queue.Enqueue(key, allowDetachedCustomGreeting: customVenueGreeting);
             }
             else if (VenueService.ContainsKey(session.Greeted, key))
             {
+                if (customVenueGreeting)
+                    logs.Info("Custom venue greeting skipped", $"{key.Display} entered the custom greeting region, but they are already in the greeted list for this session.");
                 VenueService.RemoveKey(session.Greeted, key);
                 session.Greeted.Insert(0, key);
             }
@@ -258,7 +267,7 @@ public sealed class VisitorService
         state.LastSeenUtc = DateTimeOffset.UtcNow;
         state.ReturningThisSession = HasBeenGreetedBefore(visitor);
 
-        if (!session.CustomRegionGreetings.TryGetValue(routeId, out var greetedForRoute) || !VenueService.ContainsKey(greetedForRoute, key))
+        if (config.AutoGreetEnabled && (!session.CustomRegionGreetings.TryGetValue(routeId, out var greetedForRoute) || !VenueService.ContainsKey(greetedForRoute, key)))
             queue.EnqueueCustomRegionMacro(key, routeId, route.MacroId);
 
         venues.RepairActiveVenueData();
@@ -410,9 +419,67 @@ public sealed class VisitorService
     {
         var venue = venues.ActiveVenueOrNull;
         if (venue is null) return;
+
         venue.Session.Reset();
         venue.Queue.Clear();
-        persistence.SaveNow();
+
+        var restored = RestoreCurrentVisitorListAfterReset(venue);
+        venues.RepairActiveVenueData();
+
+        if (config.ChatNotificationsEnabled)
+            DalamudServices.ChatGui.Print($"[AutoGreet] Session reset. Current visitor list restored with {restored} visitor{(restored == 1 ? string.Empty : "s")}.");
+    }
+
+    private int RestoreCurrentVisitorListAfterReset(VenueProfile venue)
+    {
+        var restored = 0;
+        foreach (var key in detection.GetCurrentVisibleVisitors())
+        {
+            AddCurrentVisitorAfterSessionReset(venue, key);
+            restored++;
+        }
+
+        return restored;
+    }
+
+    private void AddCurrentVisitorAfterSessionReset(VenueProfile venue, VisitorKey key)
+    {
+        if (venue.Blacklist.Contains(key.ToString()))
+        {
+            EnsureBlacklistedSessionPresence(venue, key, hereWhenArrived: true, countVisit: false);
+            return;
+        }
+
+        var session = venue.Session;
+        if (!venue.LifetimeVisitors.TryGetValue(key.ToString(), out var visitor))
+            visitor = Visitor.FromKey(key);
+
+        visitor.LastSeenUtc = DateTimeOffset.UtcNow;
+        venue.LifetimeVisitors[key.ToString()] = visitor;
+
+        var existing = session.NightlyVisitors.FirstOrDefault(v => SameKey(v.Key, key));
+        if (existing is null)
+        {
+            session.NightlyVisitors.Add(new SessionVisitorState
+            {
+                Key = key,
+                EnteredUtc = DateTimeOffset.UtcNow,
+                LastSeenUtc = DateTimeOffset.UtcNow,
+                ReturningThisSession = HasBeenGreetedBefore(visitor),
+                Present = true,
+                HereWhenArrived = true,
+            });
+        }
+        else
+        {
+            existing.Present = true;
+            existing.LastSeenUtc = DateTimeOffset.UtcNow;
+            existing.ReturningThisSession = HasBeenGreetedBefore(visitor);
+            existing.HereWhenArrived = true;
+        }
+
+        if (!VenueService.ContainsKey(session.Ungreeted, key) && !VenueService.ContainsKey(session.Skipped, key) && !VenueService.ContainsKey(session.Greeted, key))
+            session.Greeted.Add(key);
     }
 
     public int ImportCurrentVisitorsForGreeting(IEnumerable<VisitorKey> keys)

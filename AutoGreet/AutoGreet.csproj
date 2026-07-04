@@ -8,7 +8,7 @@
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <AssemblyName>AutoGreet</AssemblyName>
     <RootNamespace>AutoGreet</RootNamespace>
-    <Version>1.0.26.0</Version>
+    <Version>1.0.33.0</Version>
     <Description>Venue host assistant for Final Fantasy XIV housing venues.</Description>
     <IsPackable>false</IsPackable>
     <UseWindowsForms>true</UseWindowsForms>
