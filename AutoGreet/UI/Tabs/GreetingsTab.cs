@@ -160,7 +160,7 @@ public sealed class GreetingsTab
             }
         }
 
-        foreach (var macro in profile.Macros.ToArray())
+        foreach (var macro in profile.Macros.Where(m => m.Category != GreetingCategory.Blacklisted).ToArray())
             DrawMacro(venue, profile, macro);
 
         ImGui.PopID();
@@ -272,12 +272,13 @@ public sealed class GreetingsTab
             CaptureKeyboardWhileEditing();
             if (ImGui.IsItemDeactivatedAfterEdit()) persistence.SaveNow();
             var cat = (int)macro.Category;
-            if (ImGui.Combo("Category", ref cat, "First-time\0Returning\0VIP\0Blacklisted\0")) { macro.Category = (GreetingCategory)cat; persistence.SaveNow(); }
+            if (cat == (int)GreetingCategory.Blacklisted) cat = (int)GreetingCategory.FirstTime;
+            if (ImGui.Combo("Category", ref cat, "First-time\0Returning\0VIP\0")) { macro.Category = (GreetingCategory)Math.Clamp(cat, 0, 2); persistence.SaveNow(); }
             var script = macro.Script;
             if (ImGui.InputTextMultiline("Script", ref script, 8192, new System.Numerics.Vector2(-1, 140))) { macro.Script = script; }
             CaptureKeyboardWhileEditing();
             if (ImGui.IsItemDeactivatedAfterEdit()) persistence.SaveNow();
-            ImGui.TextDisabled("Supported: /tell <t>, /dote <t>, /wait X. Other slash commands pass through with <t> substitution.");
+            ImGui.TextDisabled("Supported: /tell <t>, /t <t>, /dote <t>, /wait X, /wait.X, /waitX, and inline waits like <wait.02>. Unsupported syntax pauses AutoGreet and appears in the Log tab.");
             if (ImGui.Button("Clone macro"))
             {
                 var clone = new GreetingMacro

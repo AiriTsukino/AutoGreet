@@ -183,12 +183,25 @@ internal sealed class SettingsTab
         UiHelpers.Section("Greeting behavior");
 
         var resumeEmote = config.ResumePreviousEmoteEnabled;
-        if (ImGui.Checkbox("Resume Previous Emote", ref resumeEmote))
+        if (ImGui.Checkbox("Resume emote after greeting", ref resumeEmote))
         {
             config.ResumePreviousEmoteEnabled = resumeEmote;
             persistence.SaveNow();
         }
-        UiHelpers.TooltipOnHover("After AutoGreet runs a manual greeting or queued auto-greeting, AutoGreet will try to resume the persistent emote you were doing before the greeting started. Example: if you were dancing with /beesknees, AutoGreet will try to start /beesknees again after the greeting finishes.");
+        UiHelpers.TooltipOnHover("After AutoGreet finishes a manual greeting or queued auto-greeting, AutoGreet runs the slash command entered below.");
+
+        var resumeCommand = config.ResumeEmoteCommand;
+        ImGui.SetNextItemWidth(240f);
+        if (ImGui.InputText("Resume emote command", ref resumeCommand, 80))
+        {
+            resumeCommand = resumeCommand.Trim();
+            if (!string.IsNullOrWhiteSpace(resumeCommand) && !resumeCommand.StartsWith('/'))
+                resumeCommand = "/" + resumeCommand;
+
+            config.ResumeEmoteCommand = resumeCommand;
+            persistence.SaveNow();
+        }
+        UiHelpers.TooltipOnHover("Example: /beesknees, /hum, /mandervilledance, /sit.");
 
         var waitForTarget = config.WaitForVisibleTargetBeforeEmote;
         if (ImGui.Checkbox("Wait for emote target to load", ref waitForTarget))
@@ -239,15 +252,16 @@ internal sealed class SettingsTab
     private void DrawDetectionDiagnostics()
     {
         UiHelpers.Section("Detection diagnostics");
-        ImGui.Text($"Current territory: {detection.CurrentTerritoryType}");
+        ImGui.Text($"Current location: {HousingLocationFormatter.GetTerritoryDisplayName(detection.CurrentTerritoryType)}");
         ImGui.Text($"Scan active: {(detection.IsScanningActive ? "yes" : "no")}");
         ImGui.Text($"Housing scan active: {(detection.IsInHousingInterior ? "yes" : "no")}");
         ImGui.Text($"Custom region active: {(detection.IsInCustomRegionTerritory ? "yes" : "no")}");
         ImGui.Text($"Detected player actors: {detection.CurrentPlayerObjectCount}");
         ImGui.Text($"Cached visitors present: {detection.PresentKeys.Count}");
+        ImGui.TextWrapped($"Current plot lock location: {detection.CurrentPlotLockStatus}");
         ImGui.TextWrapped(detection.LastStatus);
 
-        UiHelpers.TextDisabledWrapped("AutoGreet automatically scans housing interiors when the game's housing manager or known housing territory IDs report that you are inside a house/apartment. Outdoor or non-housing detection is configured from the Regions tab.");
+        UiHelpers.TextDisabledWrapped("AutoGreet automatically scans housing interiors when the game's housing manager reports that you are inside a house/apartment. Outdoor or non-housing detection is configured from the Regions tab.");
     }
 
 
@@ -261,7 +275,7 @@ internal sealed class SettingsTab
     private void DrawCustomRegionSettings()
     {
         UiHelpers.Section("Regions");
-        UiHelpers.TextDisabledWrapped("Regions let AutoGreet detect visitors in non-housing zones. They are saved per territory in AutoGreet\\CustomRegions.json and are fixed in world space, so you can move around after setting them up.");
+        UiHelpers.TextDisabledWrapped("Regions let AutoGreet detect visitors in non-housing zones or specific parts of a housing/location map. They are saved in AutoGreet\\CustomRegions.json and can be viewed and edited here even when you are not currently in their zone.");
         ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1f, 0.25f, 0.25f, 1f));
         ImGui.TextWrapped("Warning: Be careful creating regions in public city states or other crowded zones. AutoGreet will detect anyone inside the region, and large crowds may reduce performance or create noisy visitor lists.");
         ImGui.PopStyleColor();
@@ -270,18 +284,27 @@ internal sealed class SettingsTab
             detection.CreateRegionAtLocalPlayer();
         UiHelpers.TooltipOnHover("Creates a new custom detection region centered at your current character position. Default size is a 5-yalm radius sphere. Cube regions default to 5 x 5 x 5 yalms.");
 
-        var regions = detection.GetRegionsForCurrentTerritory().ToArray();
+        var regions = persistence.CustomRegions
+            .OrderBy(r => HousingLocationFormatter.GetTerritoryDisplayName(r.TerritoryType), StringComparer.OrdinalIgnoreCase)
+            .ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         if (regions.Length == 0)
         {
-            ImGui.TextDisabled("No custom regions for this territory.");
+            ImGui.TextDisabled("No custom regions have been created yet.");
             return;
         }
 
         foreach (var region in regions)
         {
             ImGui.PushID($"region-{region.Id}");
-            if (ImGui.TreeNodeEx(region.Name, ImGuiTreeNodeFlags.DefaultOpen))
+            var regionHeader = HousingLocationFormatter.GetRegionDisplayName(region);
+            if (ImGui.TreeNodeEx(regionHeader, ImGuiTreeNodeFlags.None))
             {
+                var isCurrentTerritory = region.TerritoryType == detection.CurrentTerritoryType;
+                ImGui.TextDisabled($"Location: {HousingLocationFormatter.GetTerritoryDisplayName(region.TerritoryType)}");
+                if (!isCurrentTerritory)
+                    UiHelpers.TextDisabledWrapped("You can edit this saved region here. Its overlay and Move Center button only work when you are currently in that location.");
+
                 var enabled = region.Enabled;
                 if (ImGui.Checkbox("Enabled", ref enabled))
                 {
@@ -384,6 +407,7 @@ internal sealed class SettingsTab
                 }
                 UiHelpers.TooltipOnHover("The fixed world-space center of the detection region. Drag values left/right to offset it, or Ctrl+click a field to type.");
 
+                if (!isCurrentTerritory) ImGui.BeginDisabled();
                 if (ImGui.Button("Move Center to My Feet"))
                 {
                     var local = DalamudServices.ObjectTable.LocalPlayer;
@@ -394,6 +418,7 @@ internal sealed class SettingsTab
                         persistence.SaveNow();
                     }
                 }
+                if (!isCurrentTerritory) ImGui.EndDisabled();
                 ImGui.SameLine();
                 if (ImGui.Button("Delete Region"))
                 {

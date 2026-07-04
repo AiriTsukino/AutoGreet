@@ -117,6 +117,8 @@ public sealed class PersistenceService : IDisposable
                 FirstTimeGreetingRegionId = record.FirstTimeGreetingRegionId,
                 ReturningGreetingRegionId = record.ReturningGreetingRegionId,
                 VipGreetingRegionId = record.VipGreetingRegionId,
+                PlotLock = record.PlotLock ?? new VenuePlotLock(),
+                CustomRegionMacroRoutes = record.CustomRegionMacroRoutes ?? [],
                 Blacklist = new HashSet<string>(record.Blacklist ?? [], StringComparer.OrdinalIgnoreCase),
                 GreetingProfiles = greetingsFile.GreetingProfilesByVenue.TryGetValue(id, out var profiles) ? profiles : [],
                 LifetimeVisitors = visitorsFile.LifetimeVisitorsByVenue.TryGetValue(id, out var visitors)
@@ -152,6 +154,8 @@ public sealed class PersistenceService : IDisposable
                 FirstTimeGreetingRegionId = v.FirstTimeGreetingRegionId,
                 ReturningGreetingRegionId = v.ReturningGreetingRegionId,
                 VipGreetingRegionId = v.VipGreetingRegionId,
+                PlotLock = v.PlotLock,
+                CustomRegionMacroRoutes = v.CustomRegionMacroRoutes,
                 Blacklist = v.Blacklist.Order(StringComparer.OrdinalIgnoreCase).ToList(),
             }).ToList(),
         };
@@ -327,6 +331,8 @@ public sealed class PersistenceService : IDisposable
         public Guid FirstTimeGreetingRegionId { get; set; }
         public Guid ReturningGreetingRegionId { get; set; }
         public Guid VipGreetingRegionId { get; set; }
+        public VenuePlotLock PlotLock { get; set; } = new();
+        public List<CustomRegionMacroRoute> CustomRegionMacroRoutes { get; set; } = [];
         public List<string> Blacklist { get; set; } = [];
     }
 

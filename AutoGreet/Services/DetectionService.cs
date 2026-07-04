@@ -13,6 +13,7 @@ public sealed class DetectionService : IDisposable
     private readonly PersistenceService persistence;
     private readonly HashSet<string> present = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> greetingPresent = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<Guid, HashSet<string>> customRegionPresent = new();
     private readonly TimeSpan scanInterval = TimeSpan.FromMilliseconds(500);
     private DateTimeOffset lastScan = DateTimeOffset.MinValue;
     private bool disposed;
@@ -23,6 +24,7 @@ public sealed class DetectionService : IDisposable
     public event Action<VisitorKey>? PlayerDoorbellEntered;
     public event Action<VisitorKey>? PlayerPresentOnArrival;
     public event Action<VisitorKey>? PlayerLeft;
+    public event Action<VisitorKey, Guid>? PlayerCustomRegionMacroEntered;
 
     public bool IsInHousingInterior { get; private set; }
     public bool IsInCustomRegionTerritory { get; private set; }
@@ -31,6 +33,7 @@ public sealed class DetectionService : IDisposable
     public int CurrentPlayerObjectCount { get; private set; }
     public DateTimeOffset LastScanUtc { get; private set; } = DateTimeOffset.MinValue;
     public string LastStatus { get; private set; } = "Waiting for first scan.";
+    public string CurrentPlotLockStatus { get; private set; } = "Unknown";
     public IReadOnlySet<string> PresentKeys => present;
 
     public DetectionService(Configuration config, PersistenceService persistence)
@@ -69,6 +72,17 @@ public sealed class DetectionService : IDisposable
         var activeRegions = GetActiveRegionsForCurrentTerritory().ToList();
         var useCustomRegions = activeRegions.Count > 0;
         var venue = GetActiveVenue();
+        UpdateCurrentPlotLockStatus();
+
+        if (venue is not null && venue.PlotLock.Enabled && !IsCurrentPlotAllowed(venue))
+        {
+            config.ActiveVenueDisabled = true;
+            CurrentPlayerObjectCount = 0;
+            LastStatus = $"Active venue was set to None because you left its locked plot. Venue: {venue.Name}. Expected: {venue.PlotLock.DisplayText}. Current: {CurrentPlotLockStatus}";
+            persistence.SaveNow();
+            ClearPresenceCache();
+            return;
+        }
 
         IsInHousingInterior = inHousing;
         IsInCustomRegionTerritory = useCustomRegions;
@@ -83,6 +97,7 @@ public sealed class DetectionService : IDisposable
 
         var doorbellCurrent = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var greetingCurrent = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var routeCurrent = CreateRoutePresenceSets(venue);
         var seenPlayers = 0;
         foreach (var obj in DalamudServices.ObjectTable.PlayerObjects)
         {
@@ -101,6 +116,9 @@ public sealed class DetectionService : IDisposable
 
             if (!config.ActiveVenueDisabled && IsInGreetingArea(venue, key, pc.Position, inHousing, activeRegions))
                 greetingCurrent.Add(key.ToString());
+
+            if (!config.ActiveVenueDisabled)
+                AddCustomRegionRoutePresence(venue, key, pc.Position, routeCurrent);
         }
 
         CurrentPlayerObjectCount = seenPlayers;
@@ -114,6 +132,7 @@ public sealed class DetectionService : IDisposable
             greetingPresent.Clear();
             foreach (var key in doorbellCurrent) present.Add(key);
             foreach (var key in greetingCurrent) greetingPresent.Add(key);
+            ReplaceCustomRegionPresence(routeCurrent);
             baselineCaptured = true;
 
             foreach (var existing in doorbellCurrent)
@@ -132,6 +151,7 @@ public sealed class DetectionService : IDisposable
 
         var greetingEntered = greetingCurrent.Except(greetingPresent, StringComparer.OrdinalIgnoreCase).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var doorbellEntered = doorbellCurrent.Except(present, StringComparer.OrdinalIgnoreCase).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var customRouteEntered = GetCustomRegionRouteEntered(routeCurrent);
 
         foreach (var entered in doorbellEntered)
         {
@@ -142,6 +162,10 @@ public sealed class DetectionService : IDisposable
         foreach (var entered in greetingEntered)
             if (VisitorKey.TryParse(entered, out var key)) PlayerEntered?.Invoke(key);
 
+        foreach (var (routeId, enteredKeys) in customRouteEntered)
+            foreach (var entered in enteredKeys)
+                if (VisitorKey.TryParse(entered, out var key)) PlayerCustomRegionMacroEntered?.Invoke(key, routeId);
+
         foreach (var left in present.Except(doorbellCurrent, StringComparer.OrdinalIgnoreCase))
             if (VisitorKey.TryParse(left, out var key)) PlayerLeft?.Invoke(key);
 
@@ -149,6 +173,7 @@ public sealed class DetectionService : IDisposable
         greetingPresent.Clear();
         foreach (var key in doorbellCurrent) present.Add(key);
         foreach (var key in greetingCurrent) greetingPresent.Add(key);
+        ReplaceCustomRegionPresence(routeCurrent);
         var scanMode = config.ActiveVenueDisabled ? "paused monitor" : "active venue";
         LastStatus = $"Scanning territory {CurrentTerritoryType}. Source: {GetSourceText(inHousing, housingManagerInside, useCustomRegions, venue)}. Mode: {scanMode}. Player actors: {seenPlayers}, doorbell tracked: {present.Count}, greeting-area tracked: {greetingPresent.Count}.";
     }
@@ -157,6 +182,7 @@ public sealed class DetectionService : IDisposable
     {
         present.Clear();
         greetingPresent.Clear();
+        customRegionPresent.Clear();
         baselineCaptured = false;
         wasInDetectionArea = false;
     }
@@ -172,6 +198,8 @@ public sealed class DetectionService : IDisposable
             .Where(r => r.TerritoryType == CurrentTerritoryType && r.Enabled)
             .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+    public bool TryGetCurrentPlotLock(out VenuePlotLock location) => HousingDetector.TryGetCurrentLocation(out location);
 
     public CustomDetectionRegion? CreateRegionAtLocalPlayer(string? name = null)
     {
@@ -311,7 +339,7 @@ public sealed class DetectionService : IDisposable
             var world = GetWorldName(pc);
             if (!world.Equals(key.World, StringComparison.OrdinalIgnoreCase)) continue;
 
-            return IsInGreetingArea(venue, key, pc.Position, inHousing, activeRegions);
+            return IsInDefaultDetectionArea(pc.Position, inHousing, activeRegions) || IsInDoorbellArea(venue, pc.Position, inHousing, activeRegions);
         }
 
         return false;
@@ -323,6 +351,70 @@ public sealed class DetectionService : IDisposable
             return null;
 
         return persistence.Venues.FirstOrDefault(v => v.Id == config.ActiveVenueId);
+    }
+
+
+    private bool IsCurrentPlotAllowed(VenueProfile venue)
+    {
+        if (!venue.PlotLock.Enabled)
+            return true;
+
+        return HousingDetector.TryGetCurrentLocation(out var current) && venue.PlotLock.Matches(current);
+    }
+
+    private void UpdateCurrentPlotLockStatus()
+    {
+        CurrentPlotLockStatus = HousingDetector.TryGetCurrentLocation(out var current)
+            ? current.DisplayText
+            : "Unavailable";
+    }
+
+    private Dictionary<Guid, HashSet<string>> CreateRoutePresenceSets(VenueProfile? venue)
+    {
+        var result = new Dictionary<Guid, HashSet<string>>();
+        if (venue is null) return result;
+
+        foreach (var route in venue.CustomRegionMacroRoutes.Where(r => r.Enabled && r.RegionId != Guid.Empty && r.MacroId != Guid.Empty))
+            result[route.Id] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        return result;
+    }
+
+    private void AddCustomRegionRoutePresence(VenueProfile? venue, VisitorKey key, Vector3 position, Dictionary<Guid, HashSet<string>> routeCurrent)
+    {
+        if (venue is null || routeCurrent.Count == 0)
+            return;
+
+        var keyText = key.ToString();
+        foreach (var route in venue.CustomRegionMacroRoutes.Where(r => r.Enabled && routeCurrent.ContainsKey(r.Id)))
+        {
+            var region = persistence.CustomRegions.FirstOrDefault(r => r.Id == route.RegionId && r.TerritoryType == CurrentTerritoryType);
+            if (region is not null && region.Enabled && region.Contains(position))
+                routeCurrent[route.Id].Add(keyText);
+        }
+    }
+
+    private Dictionary<Guid, HashSet<string>> GetCustomRegionRouteEntered(Dictionary<Guid, HashSet<string>> routeCurrent)
+    {
+        var result = new Dictionary<Guid, HashSet<string>>();
+        foreach (var (routeId, current) in routeCurrent)
+        {
+            if (!customRegionPresent.TryGetValue(routeId, out var previous))
+                previous = [];
+
+            var entered = current.Except(previous, StringComparer.OrdinalIgnoreCase).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (entered.Count > 0)
+                result[routeId] = entered;
+        }
+
+        return result;
+    }
+
+    private void ReplaceCustomRegionPresence(Dictionary<Guid, HashSet<string>> routeCurrent)
+    {
+        customRegionPresent.Clear();
+        foreach (var (routeId, current) in routeCurrent)
+            customRegionPresent[routeId] = new HashSet<string>(current, StringComparer.OrdinalIgnoreCase);
     }
 
     private bool IsInDoorbellArea(VenueProfile? venue, Vector3 position, bool inHousing, IReadOnlyList<CustomDetectionRegion> activeRegions)
@@ -600,6 +692,113 @@ internal static class HousingDetector
         catch
         {
             return false;
+        }
+    }
+
+    public static unsafe bool TryGetCurrentLocation(out VenuePlotLock location)
+    {
+        location = new VenuePlotLock
+        {
+            World = GetLocalWorldName(),
+            TerritoryType = DalamudServices.ClientState.TerritoryType,
+            OriginalHouseTerritoryType = 0,
+            HousingDistrict = string.Empty,
+            LocationKind = VenuePlotLock.LocationKindAny,
+            Ward = -1,
+            Plot = -1,
+            Room = -1,
+            Division = -1,
+        };
+
+        try
+        {
+            var manager = HousingManager.Instance();
+            if (manager == null)
+            {
+                location.HousingDistrict = HousingLocationFormatter.GetKnownHousingDistrictFromTerritory(location.TerritoryType);
+                return location.TerritoryType != 0;
+            }
+
+            location.OriginalHouseTerritoryType = HousingManager.GetOriginalHouseTerritoryTypeId();
+            location.HousingDistrict = GetCurrentHousingDistrict(manager, location.OriginalHouseTerritoryType, location.TerritoryType);
+
+            var ward = manager->GetCurrentWard();
+            if (ward >= 0) location.Ward = ward;
+
+            var division = manager->GetCurrentDivision();
+            if (division is 1 or 2) location.Division = division;
+
+            var plot = manager->GetCurrentPlot();
+            var room = manager->GetCurrentRoom();
+            var currentHouseId = manager->GetCurrentHouseId();
+            var indoorHouseId = manager->GetCurrentIndoorHouseId();
+
+            var apartmentByPlot = plot is -128 or -127;
+            var apartmentByHouseId = currentHouseId.IsApartment || indoorHouseId.IsApartment;
+            var isApartment = apartmentByPlot || apartmentByHouseId;
+
+            if (plot == -128) location.Division = 1;
+            if (plot == -127) location.Division = 2;
+
+            if (isApartment)
+            {
+                location.LocationKind = VenuePlotLock.LocationKindApartment;
+                location.Plot = -1;
+                var resolvedRoom = room > 0 ? room : currentHouseId.RoomNumber > 0 ? currentHouseId.RoomNumber : indoorHouseId.RoomNumber;
+                location.Room = resolvedRoom > 0 ? resolvedRoom : -1;
+            }
+            else if (plot >= 0)
+            {
+                location.LocationKind = VenuePlotLock.LocationKindPlot;
+                location.Plot = plot;
+                location.Room = -1;
+            }
+
+            return location.TerritoryType != 0
+                   || location.OriginalHouseTerritoryType != 0
+                   || !string.IsNullOrWhiteSpace(location.HousingDistrict)
+                   || location.Ward >= 0
+                   || location.Plot >= 0
+                   || location.Room >= 0;
+        }
+        catch (Exception ex)
+        {
+            DalamudServices.Log.Debug(ex, "AutoGreet could not read full housing location data.");
+            location.HousingDistrict = HousingLocationFormatter.GetKnownHousingDistrictFromTerritory(location.TerritoryType);
+            return location.TerritoryType != 0;
+        }
+    }
+
+    private static unsafe string GetCurrentHousingDistrict(HousingManager* manager, uint originalHouseTerritoryType, uint currentTerritoryType)
+    {
+        try
+        {
+            var housingTypeText = manager->GetCurrentHousingTerritoryType().ToString();
+            var normalized = HousingLocationFormatter.NormalizeHousingDistrictName(housingTypeText);
+            if (!string.IsNullOrWhiteSpace(normalized))
+                return normalized;
+        }
+        catch
+        {
+            // Fall back below.
+        }
+
+        var original = HousingLocationFormatter.GetKnownHousingDistrictFromTerritory(originalHouseTerritoryType);
+        if (!string.IsNullOrWhiteSpace(original)) return original;
+
+        return HousingLocationFormatter.GetKnownHousingDistrictFromTerritory(currentTerritoryType);
+    }
+
+    private static string GetLocalWorldName()
+    {
+        try
+        {
+            var local = DalamudServices.ObjectTable.LocalPlayer;
+            return local?.HomeWorld.Value.Name.ToString() ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
         }
     }
 }

@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using AutoGreet.Models;
 using Dalamud.Game.Text;
 using Dalamud.Game.Chat;
@@ -6,8 +7,10 @@ namespace AutoGreet.Services;
 
 public sealed class GreetingService : IDisposable
 {
+    private static readonly Regex InlineWaitRegex = new(@"<wait\.(?<seconds>\d+(?:\.\d+)?)>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private readonly VenueService venues;
-    private readonly Dictionary<string, VisitorKey> pendingTellLines = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, PendingTell> pendingTellLines = new(StringComparer.OrdinalIgnoreCase);
     private VisitorService? visitorService;
 
     public string LastCommandText { get; set; } = "None";
@@ -39,6 +42,15 @@ public sealed class GreetingService : IDisposable
             ?? profile.Macros.FirstOrDefault(m => m.Enabled && m.Category == GreetingCategory.FirstTime);
     }
 
+    public GreetingMacro? PickMacroById(Guid macroId)
+    {
+        if (macroId == Guid.Empty) return null;
+        var venue = venues.ActiveVenueOrNull;
+        if (venue is null) return null;
+        var profile = venues.GetGreetingProfileForVenue(venue);
+        return profile.Macros.FirstOrDefault(m => m.Enabled && m.Id == macroId && m.Category != GreetingCategory.Blacklisted);
+    }
+
     public GreetingCategory GetCategory(VisitorKey key)
     {
         var venue = venues.ActiveVenueOrNull;
@@ -54,14 +66,15 @@ public sealed class GreetingService : IDisposable
         var normalized = Normalize(message);
         return venues.AllGreetingProfiles
             .SelectMany(x => x.Profile.Macros)
+            .Where(m => m.Category != GreetingCategory.Blacklisted)
             .SelectMany(GetTellLines)
             .Any(line => Normalize(line).Equals(normalized, StringComparison.OrdinalIgnoreCase));
     }
 
-    public void RegisterExpectedTell(VisitorKey key, string message)
+    public void RegisterExpectedTell(VisitorKey key, string message, bool markVisitorGreeted = true)
     {
         var normalized = Normalize(message);
-        pendingTellLines[normalized] = key;
+        pendingTellLines[normalized] = new PendingTell(key, markVisitorGreeted);
         LastGreetingConfirmation = $"Waiting for outgoing tell to {key.Display}: {message}";
     }
 
@@ -73,10 +86,14 @@ public sealed class GreetingService : IDisposable
         // CommandManager.ProcessCommand returning without throwing is the best local confirmation available.
         // We still keep the ChatMessage observer for diagnostics when the outgoing tell event is available.
         var normalized = Normalize(message);
-        pendingTellLines.Remove(normalized);
+        var shouldMark = true;
+        if (pendingTellLines.Remove(normalized, out var pending))
+            shouldMark = pending.MarkVisitorGreeted;
+
         LastOutgoingTellObserved = message;
         LastGreetingConfirmation = $"Confirmed greeting command for {key.Display}.";
-        visitorService?.MarkGreeted(key);
+        if (shouldMark)
+            visitorService?.MarkGreeted(key);
     }
 
     public bool MacroHasTell(GreetingMacro macro) => GetTellLines(macro).Any();
@@ -88,7 +105,7 @@ public sealed class GreetingService : IDisposable
         var messageText = chatMessage.Message.TextValue;
         LastOutgoingTellObserved = messageText;
         var text = Normalize(messageText);
-        if (!pendingTellLines.TryGetValue(text, out var key))
+        if (!pendingTellLines.TryGetValue(text, out var pending))
         {
             LastGreetingConfirmation = "Outgoing tell observed, but it did not match a pending AutoGreet tell.";
             return;
@@ -100,21 +117,30 @@ public sealed class GreetingService : IDisposable
         }
 
         pendingTellLines.Remove(text);
-        LastGreetingConfirmation = $"Confirmed greeting for {key.Display}.";
-        visitorService?.MarkGreeted(key);
+        LastGreetingConfirmation = $"Confirmed greeting for {pending.Key.Display}.";
+        if (pending.MarkVisitorGreeted)
+            visitorService?.MarkGreeted(pending.Key);
     }
 
     private static IEnumerable<string> GetTellLines(GreetingMacro macro)
     {
         foreach (var raw in macro.Script.Split('\n'))
         {
-            var line = raw.Trim();
-            if (!line.StartsWith("/tell <t>", StringComparison.OrdinalIgnoreCase)) continue;
-            yield return line[9..].Trim();
+            var line = InlineWaitRegex.Replace(raw.Trim(), string.Empty).Trim();
+            if (line.StartsWith("/tell <t>", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return line[9..].Trim();
+                continue;
+            }
+
+            if (line.StartsWith("/t <t>", StringComparison.OrdinalIgnoreCase))
+                yield return line[6..].Trim();
         }
     }
 
     public static string Normalize(string text) => string.Join(' ', text.Replace("<t>", string.Empty, StringComparison.OrdinalIgnoreCase).Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim();
 
     public void Dispose() => DalamudServices.ChatGui.ChatMessage -= OnChatMessage;
+
+    private readonly record struct PendingTell(VisitorKey Key, bool MarkVisitorGreeted);
 }

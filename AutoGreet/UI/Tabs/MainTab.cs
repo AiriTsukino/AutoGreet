@@ -124,8 +124,7 @@ internal sealed class MainTab
         DrawMacroSelector(venue, GreetingCategory.FirstTime, "Active first-time macro");
         DrawMacroSelector(venue, GreetingCategory.Returning, "Active returning macro");
         DrawMacroSelector(venue, GreetingCategory.Vip, "Active VIP macro");
-        DrawMacroSelector(venue, GreetingCategory.Blacklisted, "Active blacklisted macro");
-        UiHelpers.TextDisabledWrapped("Blacklisted visitors are excluded from auto-greeting. This selection is saved for venues that use blacklist-specific manual messaging later.");
+        UiHelpers.TextDisabledWrapped("Blacklisted visitors are excluded from auto-greeting.");
 
         ImGui.Text($"Lifetime unique: {venue.LifetimeVisitors.Count}   Session visitors: {session.NightlyVisitors.Count}   Greeted: {session.Greeted.Count}   Ungreeted: {session.Ungreeted.Count}   Queue: {venue.Queue.Count(q => q.Status == QueueEntryStatus.Waiting)}");
         ImGui.Text($"Queue status: {(queue.IsRunning ? "processing" : "idle")}");
@@ -261,7 +260,7 @@ internal sealed class MainTab
 
     private void EnsureActiveMacroDefaults(VenueProfile venue)
     {
-        foreach (var category in new[] { GreetingCategory.FirstTime, GreetingCategory.Returning, GreetingCategory.Vip, GreetingCategory.Blacklisted })
+        foreach (var category in new[] { GreetingCategory.FirstTime, GreetingCategory.Returning, GreetingCategory.Vip })
         {
             var activeId = venue.GetActiveMacroId(category);
             var macros = venues.GetGreetingProfileForVenue(venue).Macros.Where(m => m.Enabled && m.Category == category).ToList();

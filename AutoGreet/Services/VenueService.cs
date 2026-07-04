@@ -165,7 +165,7 @@ public sealed class VenueService
         {
             profile.Name = string.IsNullOrWhiteSpace(profile.Name) ? "Profile" : profile.Name.Trim();
             profile.Macros = profile.Macros
-                .Where(m => m is not null)
+                .Where(m => m is not null && m.Category != GreetingCategory.Blacklisted)
                 .GroupBy(MacroFingerprint, StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.First())
                 .ToList();
@@ -180,7 +180,10 @@ public sealed class VenueService
         EnsureActiveMacroSelection(venue, GreetingCategory.FirstTime);
         EnsureActiveMacroSelection(venue, GreetingCategory.Returning);
         EnsureActiveMacroSelection(venue, GreetingCategory.Vip);
-        EnsureActiveMacroSelection(venue, GreetingCategory.Blacklisted);
+        venue.ActiveBlacklistedMacroId = Guid.Empty;
+        venue.PlotLock ??= new VenuePlotLock();
+        RepairPlotLock(venue.PlotLock);
+        RepairCustomRegionMacroRoutes(venue);
 
         // Collapse duplicate session rows/lists by Name@World, case-insensitively.
         venue.Session.NightlyVisitors = venue.Session.NightlyVisitors
@@ -198,7 +201,7 @@ public sealed class VenueService
         // The queue is an active work queue, not history. On plugin reload, remove stale completed/failed/cancelled rows.
         venue.Queue = venue.Queue
             .Where(q => q.Status is QueueEntryStatus.Waiting or QueueEntryStatus.Running)
-            .GroupBy(q => q.Visitor.ToString(), StringComparer.OrdinalIgnoreCase)
+            .GroupBy(q => $"{q.Visitor}::{q.CustomRegionRouteId}", StringComparer.OrdinalIgnoreCase)
             .Select(g => g.OrderBy(q => q.EnqueuedUtc).First())
             .ToList();
 
@@ -209,6 +212,52 @@ public sealed class VenueService
         }
     }
 
+
+    private static void RepairPlotLock(VenuePlotLock plotLock)
+    {
+        if (string.IsNullOrWhiteSpace(plotLock.HousingDistrict))
+        {
+            var territory = plotLock.OriginalHouseTerritoryType != 0 ? plotLock.OriginalHouseTerritoryType : plotLock.TerritoryType;
+            var district = HousingLocationFormatter.GetKnownHousingDistrictFromTerritory(territory);
+            if (!string.IsNullOrWhiteSpace(district))
+                plotLock.HousingDistrict = district;
+        }
+
+        if (string.IsNullOrWhiteSpace(plotLock.LocationKind))
+        {
+            if (plotLock.Room >= 0)
+                plotLock.LocationKind = VenuePlotLock.LocationKindApartment;
+            else if (plotLock.Plot >= 0)
+                plotLock.LocationKind = VenuePlotLock.LocationKindPlot;
+        }
+    }
+
+    private void RepairCustomRegionMacroRoutes(VenueProfile venue)
+    {
+        venue.PlotLock ??= new VenuePlotLock();
+        venue.CustomRegionMacroRoutes ??= [];
+        var profile = GetGreetingProfileForVenue(venue);
+        var enabledMacroIds = profile.Macros
+            .Where(m => m.Enabled && m.Category != GreetingCategory.Blacklisted)
+            .Select(m => m.Id)
+            .ToHashSet();
+        var regionIds = new HashSet<Guid>(persistence.CustomRegions.Select(r => r.Id));
+
+        venue.CustomRegionMacroRoutes = venue.CustomRegionMacroRoutes
+            .Where(r => r is not null && r.Id != Guid.Empty)
+            .GroupBy(r => r.Id)
+            .Select(g => g.First())
+            .ToList();
+
+        foreach (var route in venue.CustomRegionMacroRoutes)
+        {
+            route.Name = string.IsNullOrWhiteSpace(route.Name) ? "Region macro" : route.Name.Trim();
+            if (route.RegionId != Guid.Empty && !regionIds.Contains(route.RegionId))
+                route.Enabled = false;
+            if (route.MacroId != Guid.Empty && !enabledMacroIds.Contains(route.MacroId))
+                route.MacroId = Guid.Empty;
+        }
+    }
 
     private static List<GreetingProfile> MergeDuplicateGreetingProfiles(VenueProfile venue)
     {

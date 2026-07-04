@@ -22,7 +22,7 @@ public sealed class SettingsWindow : Window
         };
 
         var greetings = new GreetingsTab(venueService, persistence);
-        var venues = new VenuesTab(venueService, persistence);
+        var venues = new VenuesTab(venueService, persistence, detectionService);
         var vipBlacklist = new VipBlacklistTab(venueService, visitorService, persistence);
         settings = new SettingsTab(config, venueService, persistence, detectionService, greetingService, soundService, emoteResumeService, greetings, venues, vipBlacklist);
     }

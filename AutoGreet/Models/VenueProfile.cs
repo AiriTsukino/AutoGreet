@@ -15,6 +15,8 @@ public sealed class VenueProfile
     public Guid ActiveBlacklistedMacroId { get; set; }
     public HashSet<string> Blacklist { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public List<QueueEntry> Queue { get; set; } = [];
+    public VenuePlotLock PlotLock { get; set; } = new();
+    public List<CustomRegionMacroRoute> CustomRegionMacroRoutes { get; set; } = [];
 
     // Optional region routing. Guid.Empty means AutoGreet's default area:
     // whole housing interior when inside housing, or any enabled custom region in non-housing zones.
@@ -46,7 +48,7 @@ public sealed class VenueProfile
         GreetingCategory.FirstTime => ActiveFirstTimeMacroId,
         GreetingCategory.Returning => ActiveReturningMacroId,
         GreetingCategory.Vip => ActiveVipMacroId,
-        GreetingCategory.Blacklisted => ActiveBlacklistedMacroId,
+        GreetingCategory.Blacklisted => Guid.Empty,
         _ => Guid.Empty,
     };
 
@@ -64,7 +66,8 @@ public sealed class VenueProfile
                 ActiveVipMacroId = id;
                 break;
             case GreetingCategory.Blacklisted:
-                ActiveBlacklistedMacroId = id;
+                // Blacklisted greeting macros are intentionally unsupported.
+                ActiveBlacklistedMacroId = Guid.Empty;
                 break;
         }
     }
@@ -81,7 +84,7 @@ public sealed class VenueProfile
         venue.ActiveFirstTimeMacroId = profile.Macros.FirstOrDefault(m => m.Category == GreetingCategory.FirstTime)?.Id ?? Guid.Empty;
         venue.ActiveReturningMacroId = profile.Macros.FirstOrDefault(m => m.Category == GreetingCategory.Returning)?.Id ?? Guid.Empty;
         venue.ActiveVipMacroId = profile.Macros.FirstOrDefault(m => m.Category == GreetingCategory.Vip)?.Id ?? Guid.Empty;
-        venue.ActiveBlacklistedMacroId = profile.Macros.FirstOrDefault(m => m.Category == GreetingCategory.Blacklisted)?.Id ?? Guid.Empty;
+        venue.ActiveBlacklistedMacroId = Guid.Empty;
         return venue;
     }
 }

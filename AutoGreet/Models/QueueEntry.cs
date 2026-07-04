@@ -17,6 +17,8 @@ public sealed class QueueEntry
     public DateTimeOffset EnqueuedUtc { get; set; } = DateTimeOffset.UtcNow;
     public Guid GreetingProfileId { get; set; }
     public GreetingCategory Category { get; set; }
+    public Guid MacroOverrideId { get; set; }
+    public Guid CustomRegionRouteId { get; set; }
     public QueueEntryStatus Status { get; set; } = QueueEntryStatus.Waiting;
     public string StatusText { get; set; } = "Waiting";
 }

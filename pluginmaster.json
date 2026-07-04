@@ -3,7 +3,7 @@
     "Author": "Airi Tsukino",
     "Name": "AutoGreet",
     "InternalName": "AutoGreet",
-    "AssemblyVersion": "1.0.23.0",
+    "AssemblyVersion": "1.0.26.0",
     "Description": "Housing venue visitor queue and greeting assistant.",
     "Punchline": "Auto-greet and track visitors in FFXIV housing venues.",
     "RepoUrl": "https://github.com/AiriTsukino/AutoGreet",
@@ -14,6 +14,6 @@
     "IconUrl": "https://raw.githubusercontent.com/AiriTsukino/AutoGreet/main/AutoGreet/Resources/AGLogo.png",
     "DownloadLinkInstall": "https://raw.githubusercontent.com/AiriTsukino/AutoGreet/main/AutoGreet.zip",
     "DownloadLinkUpdate": "https://raw.githubusercontent.com/AiriTsukino/AutoGreet/main/AutoGreet.zip",
-    "LastUpdate": "1760000200"
+    "LastUpdate": "1783123200"
   }
 ]

@@ -5,7 +5,7 @@ namespace AutoGreet;
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 3;
+    public int Version { get; set; } = 4;
     public bool WindowVisible { get; set; }
     public bool SettingsWindowVisible { get; set; }
     public bool AutoGreetEnabled { get; set; }
@@ -16,6 +16,7 @@ public sealed class Configuration : IPluginConfiguration
     public bool ChatNotificationsForBlacklistedEnabled { get; set; } = true;
     public bool LeaveChatNotificationsEnabled { get; set; } = false;
     public bool ResumePreviousEmoteEnabled { get; set; } = false;
+    public string ResumeEmoteCommand { get; set; } = string.Empty;
     public bool WaitForVisibleTargetBeforeEmote { get; set; } = true;
     public float EmoteTargetWaitSeconds { get; set; } = 8.0f;
     public float GreetingStartDelaySeconds { get; set; } = 3.0f;

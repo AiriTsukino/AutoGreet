@@ -17,9 +17,12 @@ public sealed class MainWindow : Window
     private readonly VisitorsTab visitorsTab;
     private readonly ActiveVisitorsTab activeVisitorsTab;
     private readonly QueueTab queue;
+    private readonly LogTab logTab;
+    private readonly DiagnosticLogService logs;
     private readonly DetectionService detectionService;
     private readonly Action openSettings;
     private MainWindowTab selectedTab = MainWindowTab.Main;
+    private volatile bool selectLogTabNextDraw;
 
     private enum MainWindowTab
     {
@@ -27,9 +30,10 @@ public sealed class MainWindow : Window
         Greets,
         Visitors,
         Queue,
+        Log,
     }
 
-    public MainWindow(Configuration config, VenueService venueService, VisitorService visitorService, QueueService queueService, DetectionService detectionService, PersistenceService persistence, Action openSettings)
+    public MainWindow(Configuration config, VenueService venueService, VisitorService visitorService, QueueService queueService, DetectionService detectionService, PersistenceService persistence, DiagnosticLogService logs, Action openSettings)
         : base("AutoGreet###AutoGreetMainWindow", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoFocusOnAppearing)
     {
         this.config = config;
@@ -37,6 +41,8 @@ public sealed class MainWindow : Window
         this.venueService = venueService;
         this.detectionService = detectionService;
         this.openSettings = openSettings;
+        this.logs = logs;
+        this.logs.LogAdded += SelectLogTab;
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new System.Numerics.Vector2(780, 540),
@@ -46,6 +52,7 @@ public sealed class MainWindow : Window
         visitorsTab = new VisitorsTab(venueService, visitorService, queueService);
         activeVisitorsTab = new ActiveVisitorsTab(config, venueService, visitorService, queueService, detectionService, persistence);
         queue = new QueueTab(venueService);
+        logTab = new LogTab(logs);
     }
 
     public override void PreDraw() => AutoGreetTheme.Push();
@@ -54,6 +61,12 @@ public sealed class MainWindow : Window
 
     public override void Draw()
     {
+        if (selectLogTabNextDraw)
+        {
+            selectedTab = MainWindowTab.Log;
+            selectLogTabNextDraw = false;
+        }
+
         // Use a small manual tab row instead of ImGui TabBar items. The visible
         // counts can change whenever visitors enter/leave, but this selectedTab
         // value only changes when the user clicks a tab, so live counts no
@@ -72,6 +85,7 @@ public sealed class MainWindow : Window
             activeVisitorCount = detectionService.PresentKeys.Count;
         }
         var queueCount = venue?.Queue.Count(q => q.Status == Models.QueueEntryStatus.Waiting) ?? 0;
+        var logCount = logs.Entries.Count(e => e.Severity == Models.MacroLogSeverity.Error || e.Severity == Models.MacroLogSeverity.Warning);
 
         var tabRowScreenPos = ImGui.GetCursorScreenPos();
 
@@ -82,6 +96,8 @@ public sealed class MainWindow : Window
         DrawTabButton($"Visitors ({activeVisitorCount})##autogreet-tab-visitors", MainWindowTab.Visitors);
         ImGui.SameLine();
         DrawTabButton($"Queue ({queueCount})##autogreet-tab-queue", MainWindowTab.Queue);
+        ImGui.SameLine();
+        DrawTabButton($"Log ({logCount})##autogreet-tab-log", MainWindowTab.Log);
 
         DrawTopRightButtonsOnTabRow(tabRowScreenPos);
 
@@ -100,12 +116,17 @@ public sealed class MainWindow : Window
             case MainWindowTab.Queue:
                 queue.Draw();
                 break;
+            case MainWindowTab.Log:
+                logTab.Draw();
+                break;
             case MainWindowTab.Main:
             default:
                 main.Draw();
                 break;
         }
     }
+
+    private void SelectLogTab() => selectLogTabNextDraw = true;
 
     private void DrawTabButton(string label, MainWindowTab tab)
     {

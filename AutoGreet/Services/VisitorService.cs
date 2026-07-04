@@ -237,6 +237,33 @@ public sealed class VisitorService
         venues.RepairActiveVenueData();
     }
 
+
+    public void OnPlayerCustomRegionMacroEntered(VisitorKey key, Guid routeId)
+    {
+        var venue = venues.ActiveVenueOrNull;
+        if (venue is null) return;
+        if (venue.Blacklist.Contains(key.ToString())) return;
+
+        var route = venue.CustomRegionMacroRoutes.FirstOrDefault(r => r.Id == routeId && r.Enabled);
+        if (route is null || route.MacroId == Guid.Empty) return;
+
+        var session = venue.Session;
+        if (!venue.LifetimeVisitors.TryGetValue(key.ToString(), out var visitor))
+            visitor = Visitor.FromKey(key);
+        visitor.LastSeenUtc = DateTimeOffset.UtcNow;
+        venue.LifetimeVisitors[key.ToString()] = visitor;
+
+        var state = EnsureSessionVisitor(key);
+        state.Present = true;
+        state.LastSeenUtc = DateTimeOffset.UtcNow;
+        state.ReturningThisSession = HasBeenGreetedBefore(visitor);
+
+        if (!session.CustomRegionGreetings.TryGetValue(routeId, out var greetedForRoute) || !VenueService.ContainsKey(greetedForRoute, key))
+            queue.EnqueueCustomRegionMacro(key, routeId, route.MacroId);
+
+        venues.RepairActiveVenueData();
+    }
+
     public void OnPlayerLeft(VisitorKey key)
     {
         var venue = venues.ActiveVenueOrNull;

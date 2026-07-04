@@ -20,6 +20,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly SoundService sound;
     private readonly TargetingService targeting;
     private readonly EmoteResumeService emoteResume;
+    private readonly DiagnosticLogService logs;
     private readonly MacroEngine macroEngine;
     private readonly QueueService queue;
     private readonly VisitorService visitors;
@@ -39,8 +40,9 @@ public sealed class Plugin : IDalamudPlugin
         sound = new SoundService(config);
         targeting = new TargetingService();
         emoteResume = new EmoteResumeService(config, chatCommands);
-        macroEngine = new MacroEngine(config, greetings, chatCommands, targeting);
-        queue = new QueueService(config, venues, persistence, greetings, macroEngine, detection, emoteResume);
+        logs = new DiagnosticLogService();
+        macroEngine = new MacroEngine(config, greetings, chatCommands, targeting, logs);
+        queue = new QueueService(config, venues, persistence, greetings, macroEngine, detection, emoteResume, logs);
         visitors = new VisitorService(venues, persistence, queue, config, sound);
         greetings.AttachVisitorService(visitors);
 
@@ -48,8 +50,9 @@ public sealed class Plugin : IDalamudPlugin
         detection.PlayerDoorbellEntered += visitors.OnPlayerDoorbellEntered;
         detection.PlayerPresentOnArrival += visitors.OnPlayerPresentOnArrival;
         detection.PlayerLeft += visitors.OnPlayerLeft;
+        detection.PlayerCustomRegionMacroEntered += visitors.OnPlayerCustomRegionMacroEntered;
 
-        mainWindow = new MainWindow(config, venues, visitors, queue, detection, persistence, OpenSettingsWindow) { IsOpen = config.WindowVisible };
+        mainWindow = new MainWindow(config, venues, visitors, queue, detection, persistence, logs, OpenSettingsWindow) { IsOpen = config.WindowVisible };
         settingsWindow = new SettingsWindow(config, venues, visitors, persistence, detection, greetings, sound, emoteResume) { IsOpen = config.SettingsWindowVisible };
         windowSystem.AddWindow(mainWindow);
         windowSystem.AddWindow(settingsWindow);
@@ -79,6 +82,9 @@ public sealed class Plugin : IDalamudPlugin
                 config.QueueDelaySeconds = 3.0f;
             config.Version = 3;
         }
+
+        if (config.Version < 4)
+            config.Version = 4;
     }
 
     private void OnCommand(string command, string arguments)
@@ -137,6 +143,7 @@ public sealed class Plugin : IDalamudPlugin
         detection.PlayerDoorbellEntered -= visitors.OnPlayerDoorbellEntered;
         detection.PlayerPresentOnArrival -= visitors.OnPlayerPresentOnArrival;
         detection.PlayerLeft -= visitors.OnPlayerLeft;
+        detection.PlayerCustomRegionMacroEntered -= visitors.OnPlayerCustomRegionMacroEntered;
         DalamudServices.PluginInterface.UiBuilder.Draw -= DrawUi;
         DalamudServices.PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
         DalamudServices.PluginInterface.UiBuilder.OpenConfigUi -= ToggleConfigUi;

@@ -30,6 +30,7 @@ public sealed class SessionData
     public List<VisitorKey> Ungreeted { get; set; } = [];
     public List<VisitorKey> Skipped { get; set; } = [];
     public List<NightlySnapshot> Snapshots { get; set; } = [];
+    public Dictionary<Guid, List<VisitorKey>> CustomRegionGreetings { get; set; } = [];
 
     public void Reset()
     {
@@ -39,5 +40,6 @@ public sealed class SessionData
         Greeted.Clear();
         Ungreeted.Clear();
         Skipped.Clear();
+        CustomRegionGreetings.Clear();
     }
 }
