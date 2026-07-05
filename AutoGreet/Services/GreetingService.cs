@@ -80,18 +80,20 @@ public sealed class GreetingService : IDisposable
 
     public bool IsGreetingConfirmed(VisitorKey key) => venues.ActiveVenueOrNull is { } venue && VenueService.ContainsKey(venue.Session.Greeted, key);
 
-    public void ConfirmTellCommandSent(VisitorKey key, string message)
+    public void ConfirmTellCommandSent(VisitorKey key, string message, bool markVisitorGreeted)
     {
         // Some Dalamud/API combinations do not echo local /tell commands through ChatGui.ChatMessage.
         // CommandManager.ProcessCommand returning without throwing is the best local confirmation available.
         // We still keep the ChatMessage observer for diagnostics when the outgoing tell event is available.
         var normalized = Normalize(message);
-        var shouldMark = true;
+        var shouldMark = markVisitorGreeted;
         if (pendingTellLines.Remove(normalized, out var pending))
             shouldMark = pending.MarkVisitorGreeted;
 
         LastOutgoingTellObserved = message;
-        LastGreetingConfirmation = $"Confirmed greeting command for {key.Display}.";
+        LastGreetingConfirmation = shouldMark
+            ? $"Confirmed main greeting command for {key.Display}."
+            : $"Confirmed non-greeting macro command for {key.Display}.";
         if (shouldMark)
             visitorService?.MarkGreeted(key);
     }

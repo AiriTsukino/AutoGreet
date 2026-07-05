@@ -71,7 +71,7 @@ public sealed class MacroEngine
             await SendCommandAsync(command, token).ConfigureAwait(false);
             logs.Info("Macro command sent", $"Macro '{macro.Name}' sent command for {target.Display}: {command}");
             if (tellText is not null)
-                greetings.ConfirmTellCommandSent(target, tellText);
+                greetings.ConfirmTellCommandSent(target, tellText, markVisitorGreeted);
 
             if (parsed.InlineWaitSeconds is not null)
                 await DelaySecondsAsync(parsed.InlineWaitSeconds.Value, token).ConfigureAwait(false);
