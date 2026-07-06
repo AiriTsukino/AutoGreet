@@ -278,7 +278,7 @@ public sealed class GreetingsTab
             if (ImGui.InputTextMultiline("Script", ref script, 8192, new System.Numerics.Vector2(-1, 140))) { macro.Script = script; }
             CaptureKeyboardWhileEditing();
             if (ImGui.IsItemDeactivatedAfterEdit()) persistence.SaveNow();
-            UiHelpers.TextDisabledWrapped("Supported: /tell <t>, /tell <playername>, /t <t>, /t <playername>, /dote <t>, /wait X, /wait.X, /waitX, and inline waits like <wait.02>. <playername> becomes Name@World. Unsupported syntax pauses AutoGreet and appears in the Log tab.");
+            UiHelpers.TextDisabledWrapped("Supported: /tell <t>, /tell <playername>, /t <t>, /t <playername>, FFXIV emote commands such as /dote <t>, /hug <t>, /wave, /hum, or /beesknees, /wait X, /wait.X, /waitX, and inline waits like <wait.02>. <playername> becomes Name@World. Unsupported syntax pauses AutoGreet and appears in the Log tab.");
             if (ImGui.Button("Clone macro"))
             {
                 var clone = new GreetingMacro

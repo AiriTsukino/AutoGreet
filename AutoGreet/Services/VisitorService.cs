@@ -36,10 +36,12 @@ public sealed class VisitorService
             return;
         }
 
+        var now = DateTimeOffset.UtcNow;
         var session = venue.Session;
         var wasKnown = venue.LifetimeVisitors.TryGetValue(key.ToString(), out var visitor);
         visitor ??= Visitor.FromKey(key);
-        visitor.LastSeenUtc = DateTimeOffset.UtcNow;
+        var previousLastSeenUtc = visitor.LastSeenUtc;
+        visitor.LastSeenUtc = now;
         venue.LifetimeVisitors[key.ToString()] = visitor;
 
         var existing = session.NightlyVisitors.FirstOrDefault(v => SameKey(v.Key, key));
@@ -48,8 +50,9 @@ public sealed class VisitorService
             existing = new SessionVisitorState
             {
                 Key = key,
-                EnteredUtc = DateTimeOffset.UtcNow,
-                LastSeenUtc = DateTimeOffset.UtcNow,
+                EnteredUtc = now,
+                LastSeenUtc = now,
+                LastSeenBeforeCurrentEntryUtc = previousLastSeenUtc,
                 ReturningThisSession = HasBeenGreetedBefore(visitor),
                 Present = true,
                 HereWhenArrived = true,
@@ -58,8 +61,10 @@ public sealed class VisitorService
         }
         else
         {
+            if (!existing.Present)
+                existing.LastSeenBeforeCurrentEntryUtc = previousLastSeenUtc;
             existing.Present = true;
-            existing.LastSeenUtc = DateTimeOffset.UtcNow;
+            existing.LastSeenUtc = now;
             existing.ReturningThisSession = HasBeenGreetedBefore(visitor);
             if (!VenueService.ContainsKey(session.Ungreeted, key) && !VenueService.ContainsKey(session.Skipped, key))
                 existing.HereWhenArrived = true;
@@ -96,32 +101,44 @@ public sealed class VisitorService
             return;
         }
 
+        var now = DateTimeOffset.UtcNow;
         var session = venue.Session;
         var existing = session.NightlyVisitors.FirstOrDefault(v => SameKey(v.Key, key));
         var wasKnown = venue.LifetimeVisitors.TryGetValue(key.ToString(), out var visitor);
         visitor ??= Visitor.FromKey(key);
-        visitor.LastSeenUtc = DateTimeOffset.UtcNow;
-        if (existing is null || !existing.Present)
+        var previousLastSeenUtc = visitor.LastSeenUtc;
+        var wasAway = existing is null || !existing.Present;
+        visitor.LastSeenUtc = now;
+        if (wasAway)
             visitor.TotalVisitCount++;
         venue.LifetimeVisitors[key.ToString()] = visitor;
 
+        SessionVisitorState state;
         if (existing is null)
         {
-            session.NightlyVisitors.Add(new SessionVisitorState
+            state = new SessionVisitorState
             {
                 Key = key,
-                EnteredUtc = DateTimeOffset.UtcNow,
-                LastSeenUtc = DateTimeOffset.UtcNow,
+                EnteredUtc = now,
+                LastSeenUtc = now,
+                LastSeenBeforeCurrentEntryUtc = previousLastSeenUtc,
                 ReturningThisSession = HasBeenGreetedBefore(visitor),
                 Present = true,
-            });
+            };
+            session.NightlyVisitors.Add(state);
         }
         else
         {
+            if (!existing.Present)
+                existing.LastSeenBeforeCurrentEntryUtc = previousLastSeenUtc;
             existing.Present = true;
-            existing.LastSeenUtc = DateTimeOffset.UtcNow;
+            existing.LastSeenUtc = now;
             existing.ReturningThisSession = HasBeenGreetedBefore(visitor);
+            state = existing;
         }
+
+        if (ShouldQueueGreetingTimer(session, key, visitor, previousLastSeenUtc, wasAway, now))
+            QueueGreetingTimer(session, key, state, now, customVenueGreeting: false);
 
         if (config.DoorbellSoundEnabled)
             sound.PlayDoorbell();
@@ -170,6 +187,7 @@ public sealed class VisitorService
             return;
         }
 
+        var now = DateTimeOffset.UtcNow;
         var session = venue.Session;
         var existing = session.NightlyVisitors.FirstOrDefault(v => SameKey(v.Key, key));
         var alreadyPresentFromDoorbell = existing?.Present == true;
@@ -179,8 +197,10 @@ public sealed class VisitorService
 
         var wasKnown = venue.LifetimeVisitors.TryGetValue(key.ToString(), out var visitor);
         visitor ??= Visitor.FromKey(key);
-        visitor.LastSeenUtc = DateTimeOffset.UtcNow;
-        if (existing is null || !existing.Present)
+        var previousLastSeenUtc = visitor.LastSeenUtc;
+        var wasAway = existing is null || !existing.Present;
+        visitor.LastSeenUtc = now;
+        if (wasAway)
             visitor.TotalVisitCount++;
         venue.LifetimeVisitors[key.ToString()] = visitor;
 
@@ -200,8 +220,9 @@ public sealed class VisitorService
             session.NightlyVisitors.Add(new SessionVisitorState
             {
                 Key = key,
-                EnteredUtc = DateTimeOffset.UtcNow,
-                LastSeenUtc = DateTimeOffset.UtcNow,
+                EnteredUtc = now,
+                LastSeenUtc = now,
+                LastSeenBeforeCurrentEntryUtc = previousLastSeenUtc,
                 ReturningThisSession = HasBeenGreetedBefore(visitor),
                 Present = true,
             });
@@ -214,8 +235,10 @@ public sealed class VisitorService
         }
         else
         {
+            if (!existing.Present)
+                existing.LastSeenBeforeCurrentEntryUtc = previousLastSeenUtc;
             existing.Present = true;
-            existing.LastSeenUtc = DateTimeOffset.UtcNow;
+            existing.LastSeenUtc = now;
             existing.ReturningThisSession = HasBeenGreetedBefore(visitor);
 
             if (existing.HereWhenArrived && !VenueService.ContainsKey(session.Skipped, key))
@@ -234,8 +257,13 @@ public sealed class VisitorService
                 if (config.AutoGreetEnabled)
                     queue.Enqueue(key, allowDetachedCustomGreeting: customVenueGreeting);
             }
+            else if (ShouldQueueGreetingTimer(session, key, visitor, previousLastSeenUtc, wasAway, now))
+            {
+                QueueGreetingTimer(session, key, existing, now, customVenueGreeting);
+            }
             else if (VenueService.ContainsKey(session.Greeted, key))
             {
+                LogGreetingTimerStillWaiting(session, key, visitor, previousLastSeenUtc, wasAway, now);
                 if (customVenueGreeting)
                     logs.Info("Custom venue greeting skipped", $"{key.Display} entered the custom greeting region, but they are already in the greeted list for this session.");
                 VenueService.RemoveKey(session.Greeted, key);
@@ -256,15 +284,19 @@ public sealed class VisitorService
         var route = venue.CustomRegionMacroRoutes.FirstOrDefault(r => r.Id == routeId && r.Enabled);
         if (route is null || route.MacroId == Guid.Empty) return;
 
+        var now = DateTimeOffset.UtcNow;
         var session = venue.Session;
         if (!venue.LifetimeVisitors.TryGetValue(key.ToString(), out var visitor))
             visitor = Visitor.FromKey(key);
-        visitor.LastSeenUtc = DateTimeOffset.UtcNow;
+        var previousLastSeenUtc = visitor.LastSeenUtc;
+        visitor.LastSeenUtc = now;
         venue.LifetimeVisitors[key.ToString()] = visitor;
 
         var state = EnsureSessionVisitor(key);
+        if (!state.Present)
+            state.LastSeenBeforeCurrentEntryUtc = previousLastSeenUtc;
         state.Present = true;
-        state.LastSeenUtc = DateTimeOffset.UtcNow;
+        state.LastSeenUtc = now;
         state.ReturningThisSession = HasBeenGreetedBefore(visitor);
 
         if (config.AutoGreetEnabled && (!session.CustomRegionGreetings.TryGetValue(routeId, out var greetedForRoute) || !VenueService.ContainsKey(greetedForRoute, key)))
@@ -281,12 +313,18 @@ public sealed class VisitorService
             NotifyPausedMonitorLeave(key);
             return;
         }
+        var now = DateTimeOffset.UtcNow;
         var existing = venue.Session.NightlyVisitors.FirstOrDefault(v => SameKey(v.Key, key));
         if (existing is not null)
         {
             existing.Present = false;
-            existing.LastSeenUtc = DateTimeOffset.UtcNow;
+            existing.LastSeenUtc = now;
         }
+
+        if (!venue.LifetimeVisitors.TryGetValue(key.ToString(), out var visitor))
+            visitor = Visitor.FromKey(key);
+        visitor.LastSeenUtc = now;
+        venue.LifetimeVisitors[key.ToString()] = visitor;
 
         if (config.ChatNotificationsEnabled && config.LeaveChatNotificationsEnabled)
         {
@@ -309,7 +347,9 @@ public sealed class VisitorService
         session.Greeted.Insert(0, key);
         queue.Cancel(key, "Manually marked greeted");
         var visitor = venue.LifetimeVisitors.TryGetValue(key.ToString(), out var existingVisitor) ? existingVisitor : Visitor.FromKey(key);
-        visitor.LastSeenUtc = DateTimeOffset.UtcNow;
+        var now = DateTimeOffset.UtcNow;
+        visitor.LastSeenUtc = now;
+        visitor.LastGreetedUtc = now;
         visitor.HasBeenGreeted = true;
         venue.LifetimeVisitors[key.ToString()] = visitor;
         var existing = EnsureSessionVisitor(key);
@@ -521,6 +561,60 @@ public sealed class VisitorService
             DalamudServices.ChatGui.Print($"[AutoGreet] Manual scan added {imported} visitor{(imported == 1 ? string.Empty : "s")} to the ungreeted list.");
         return imported;
     }
+
+
+    private bool ShouldQueueGreetingTimer(SessionData session, VisitorKey key, Visitor visitor, DateTimeOffset previousLastSeenUtc, bool wasAway, DateTimeOffset now)
+    {
+        if (!config.GreetingTimerEnabled || !wasAway)
+            return false;
+
+        if (!VenueService.ContainsKey(session.Greeted, key) || VenueService.ContainsKey(session.Skipped, key) || VenueService.ContainsKey(session.Ungreeted, key))
+            return false;
+
+        var basis = GetGreetingTimerBasis(visitor, previousLastSeenUtc);
+        return now - basis >= TimeSpan.FromMinutes(GetGreetingTimerMinutes());
+    }
+
+    private void LogGreetingTimerStillWaiting(SessionData session, VisitorKey key, Visitor visitor, DateTimeOffset previousLastSeenUtc, bool wasAway, DateTimeOffset now)
+    {
+        if (!config.GreetingTimerEnabled || !wasAway)
+            return;
+
+        if (!VenueService.ContainsKey(session.Greeted, key) || VenueService.ContainsKey(session.Skipped, key) || VenueService.ContainsKey(session.Ungreeted, key))
+            return;
+
+        var basis = GetGreetingTimerBasis(visitor, previousLastSeenUtc);
+        var elapsed = now - basis;
+        var required = TimeSpan.FromMinutes(GetGreetingTimerMinutes());
+        if (elapsed >= required)
+            return;
+
+        var remaining = Math.Max(1, (int)Math.Ceiling((required - elapsed).TotalMinutes));
+        logs.Info("Greeting timer not ready", $"{key.Display} re-entered, but their returning greeting timer has {remaining} minute{(remaining == 1 ? string.Empty : "s")} remaining since their last main greeting.");
+    }
+
+    private static DateTimeOffset GetGreetingTimerBasis(Visitor visitor, DateTimeOffset previousLastSeenUtc)
+    {
+        if (visitor.LastGreetedUtc > DateTimeOffset.MinValue)
+            return visitor.LastGreetedUtc;
+
+        return previousLastSeenUtc;
+    }
+
+    private void QueueGreetingTimer(SessionData session, VisitorKey key, SessionVisitorState state, DateTimeOffset now, bool customVenueGreeting)
+    {
+        VenueService.RemoveKey(session.Greeted, key);
+        VenueService.RemoveKey(session.Ungreeted, key);
+        session.Ungreeted.Add(key);
+        state.HereWhenArrived = false;
+        state.LastSeenBeforeCurrentEntryUtc = now;
+
+        logs.Info("Greeting timer queued", $"{key.Display} was queued for a returning greeting because their greeting timer reached {GetGreetingTimerMinutes()} minutes since their last main greeting.");
+        if (config.AutoGreetEnabled)
+            queue.Enqueue(key, allowDetachedCustomGreeting: customVenueGreeting);
+    }
+
+    private int GetGreetingTimerMinutes() => Math.Clamp(config.GreetingTimerMinutes, 1, 360);
 
     private void EnsureBlacklistedSessionPresence(VenueProfile venue, VisitorKey key, bool hereWhenArrived, bool countVisit)
     {

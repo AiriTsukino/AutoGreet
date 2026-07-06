@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Text;
 using AutoGreet.Models;
 using AutoGreet.Services;
 using AutoGreet.UI.Components;
@@ -66,6 +67,7 @@ internal sealed class SettingsTab
             if (ImGui.BeginTabItem("Regions")) { DrawCustomRegionSettings(); ImGui.EndTabItem(); }
             if (ImGui.BeginTabItem("VIP / Blacklist")) { vipBlacklistTab.Draw(); ImGui.EndTabItem(); }
             if (ImGui.BeginTabItem("Danger Zone")) { DrawDangerZone(); ImGui.EndTabItem(); }
+            if (ImGui.BeginTabItem("Help")) { DrawHelpTab(); ImGui.EndTabItem(); }
             if (ImGui.BeginTabItem("Diagnostics")) { DrawDiagnosticsTab(); ImGui.EndTabItem(); }
             ImGui.EndTabBar();
         }
@@ -223,6 +225,35 @@ internal sealed class SettingsTab
             UiHelpers.TooltipOnHover("Maximum time AutoGreet will wait for the next greeted visitor to become visible before running an emote command. If they leave first, the greeting is cancelled normally.");
         }
 
+        var greetingTimer = config.GreetingTimerEnabled;
+        if (ImGui.Checkbox("Greeting timer for returning visitors", ref greetingTimer))
+        {
+            config.GreetingTimerEnabled = greetingTimer;
+            config.GreetingTimerMinutes = Math.Clamp(config.GreetingTimerMinutes, 1, 360);
+            persistence.SaveNow();
+        }
+        UiHelpers.TooltipOnHover("Allows visitors who already received a main greeting this session to be queued again when they re-enter after the selected number of minutes has passed since that greeting.");
+
+        if (!config.GreetingTimerEnabled) ImGui.BeginDisabled();
+        var timerMinutes = Math.Clamp(config.GreetingTimerMinutes, 1, 360);
+        ImGui.SetNextItemWidth(220f);
+        if (ImGui.SliderInt("Re-greet after", ref timerMinutes, 1, 360, "%d min"))
+        {
+            config.GreetingTimerMinutes = Math.Clamp(timerMinutes, 1, 360);
+            persistence.SaveNow();
+        }
+        UiHelpers.TooltipOnHover("1 minute to 6 hours. Returning visitors are queued for the returning macro when this much time has passed since their last main greeting and they re-enter.");
+
+        var timerManual = config.GreetingTimerMinutes;
+        ImGui.SetNextItemWidth(140f);
+        if (ImGui.InputInt("Re-greet minutes", ref timerManual, 1, 15))
+        {
+            config.GreetingTimerMinutes = Math.Clamp(timerManual, 1, 360);
+            persistence.SaveNow();
+        }
+        UiHelpers.TooltipOnHover("Type the timer in minutes. Example: 120 means 2 hours.");
+        if (!config.GreetingTimerEnabled) ImGui.EndDisabled();
+
         // Resume emote diagnostic status is shown in the Diagnostics tab to keep General focused on settings only.
     }
 
@@ -249,6 +280,14 @@ internal sealed class SettingsTab
         ImGui.TextWrapped($"Last greeting confirmation: {greetings.LastGreetingConfirmation}");
     }
 
+    private static byte[] CreateReadOnlyBuffer(string text)
+    {
+        var bytes = Encoding.UTF8.GetBytes(text);
+        var buffer = new byte[bytes.Length + 1];
+        bytes.CopyTo(buffer, 0);
+        return buffer;
+    }
+
     private void DrawDetectionDiagnostics()
     {
         UiHelpers.Section("Detection diagnostics");
@@ -264,6 +303,35 @@ internal sealed class SettingsTab
         UiHelpers.TextDisabledWrapped("AutoGreet automatically scans housing interiors when the game's housing manager reports that you are inside a house/apartment. Outdoor or non-housing detection is configured from the Regions tab.");
     }
 
+
+    private void DrawHelpTab()
+    {
+        UiHelpers.Section("Macro syntax help");
+        UiHelpers.TextDisabledWrapped("Supported macro syntax and emote commands for greeting macros. Copy this text when sharing a macro or asking for syntax help.");
+
+        if (ImGui.Button("Copy all help text"))
+            ImGui.SetClipboardText(DiagnosticLogService.FullSupportedSyntaxText);
+
+        ImGui.SameLine();
+        if (ImGui.Button("Copy emote commands"))
+            ImGui.SetClipboardText(EmoteCommandRegistry.SupportedCommandsText);
+
+        ImGui.Spacing();
+
+        var syntaxText = DiagnosticLogService.SupportedSyntaxText;
+        var syntaxBuffer = CreateReadOnlyBuffer(syntaxText);
+        ImGui.TextUnformatted("Supported syntax");
+        ImGui.SetNextItemWidth(-1f);
+        ImGui.InputTextMultiline("##autogreet-help-supported-syntax", syntaxBuffer.AsSpan(), new Vector2(-1f, 150f), ImGuiInputTextFlags.ReadOnly);
+
+        ImGui.Spacing();
+
+        var emoteText = EmoteCommandRegistry.SupportedCommandsText;
+        var emoteBuffer = CreateReadOnlyBuffer(emoteText);
+        ImGui.TextUnformatted($"Supported emote commands ({EmoteCommandRegistry.SupportedCommands.Count})");
+        var height = Math.Max(220f, ImGui.GetContentRegionAvail().Y - 12f);
+        ImGui.InputTextMultiline("##autogreet-help-emote-commands", emoteBuffer.AsSpan(), new Vector2(-1f, height), ImGuiInputTextFlags.ReadOnly);
+    }
 
     private void ClearActiveSessionDetectionLists()
     {

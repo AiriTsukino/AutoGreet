@@ -6,6 +6,7 @@ public sealed class SessionVisitorState
     public VisitorKey Key { get; set; }
     public DateTimeOffset EnteredUtc { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset LastSeenUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset LastSeenBeforeCurrentEntryUtc { get; set; } = DateTimeOffset.MinValue;
     public bool Present { get; set; } = true;
     public bool ReturningThisSession { get; set; }
     public bool HereWhenArrived { get; set; }

@@ -5,7 +5,7 @@ namespace AutoGreet;
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 4;
+    public int Version { get; set; } = 5;
     public bool WindowVisible { get; set; }
     public bool SettingsWindowVisible { get; set; }
     public bool AutoGreetEnabled { get; set; }
@@ -21,6 +21,8 @@ public sealed class Configuration : IPluginConfiguration
     public float EmoteTargetWaitSeconds { get; set; } = 8.0f;
     public float GreetingStartDelaySeconds { get; set; } = 3.0f;
     public float QueueDelaySeconds { get; set; } = 3.0f;
+    public bool GreetingTimerEnabled { get; set; } = false;
+    public int GreetingTimerMinutes { get; set; } = 120;
     public Guid ActiveVenueId { get; set; }
     public bool ActiveVenueDisabled { get; set; }
     public bool MonitorWhenNoVenueSelected { get; set; } = false;

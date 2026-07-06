@@ -18,11 +18,15 @@ public sealed class DiagnosticLogService
         "  /tell <playername> message\n" +
         "  /t <t> message\n" +
         "  /t <playername> message\n" +
-        "  <playername> is replaced with Name@World.\n" +
-        "  /dote <t>\n" +
+        "  <playername> is replaced with FirstName LastName@World. Useful for when targeting players is not possible.\n" +
+        "  FFXIV emote commands such as /dote <t>, /hug <t>, /wave, /hum, or /beesknees\n" +
         "  /wait 1, /wait.1, /wait1\n" +
-        "  Inline waits such as <wait.1> or <wait.02> at the end of a supported line\n\n" +
-        "If you need another command syntax supported, request a syntax update before using it in active greets.";
+        "  Inline waits such as <wait.1> or <wait.02> at the end of a supported line\n\n";
+
+    public static string FullSupportedSyntaxText =>
+        SupportedSyntaxText +
+        "\n\nSupported emote commands:\n" +
+        EmoteCommandRegistry.SupportedCommandsText;
 
     public void Info(string title, string message)
         => Add(new MacroLogEntry { Severity = MacroLogSeverity.Info, Title = title, Message = message });

@@ -7,6 +7,7 @@ public sealed class Visitor
     public string World { get; set; } = string.Empty;
     public DateTimeOffset FirstSeenUtc { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset LastSeenUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset LastGreetedUtc { get; set; } = DateTimeOffset.MinValue;
     public int TotalVisitCount { get; set; }
     public bool Vip { get; set; }
     public bool HasBeenGreeted { get; set; }

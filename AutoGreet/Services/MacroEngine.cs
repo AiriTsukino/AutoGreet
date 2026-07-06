@@ -55,14 +55,14 @@ public sealed class MacroEngine
             if (tellText is not null)
                 greetings.RegisterExpectedTell(target, tellText, markVisitorGreeted);
 
-            if (parsed.Kind == MacroLineKind.Dote)
+            if (parsed.Kind == MacroLineKind.Emote && EmoteCommandRegistry.RequiresVisibleTarget(parsed.Line))
             {
                 var targetedForEmote = config.WaitForVisibleTargetBeforeEmote
                     ? await targeting.WaitForTargetAsync(target, stillPresent, config.EmoteTargetWaitSeconds, token).ConfigureAwait(false)
                     : await targeting.TargetAsync(target, token).ConfigureAwait(false);
 
                 if (!targetedForEmote)
-                    throw new InvalidOperationException($"Could not target visible player {target.Display} for /dote.");
+                    throw new InvalidOperationException($"Could not target visible player {target.Display} for emote command: {parsed.Line}");
 
                 await Task.Delay(200, token).ConfigureAwait(false);
             }
@@ -106,7 +106,7 @@ public sealed class MacroEngine
             if (TryParseWaitCommand(line, out _))
                 continue;
 
-            if (IsTellToTarget(line) || IsDote(line))
+            if (IsTellToTarget(line) || EmoteCommandRegistry.IsSupportedEmoteLine(line))
                 continue;
 
             issues.Add(new MacroSyntaxIssue(lineNumber, original, "This line does not match AutoGreet's supported macro syntax."));
@@ -153,9 +153,9 @@ public sealed class MacroEngine
                 continue;
             }
 
-            if (IsDote(line))
+            if (EmoteCommandRegistry.IsSupportedEmoteLine(line))
             {
-                parsed.Add(new ParsedMacroLine(MacroLineKind.Dote, line, null, inlineWaitSeconds));
+                parsed.Add(new ParsedMacroLine(MacroLineKind.Emote, line, null, inlineWaitSeconds));
                 continue;
             }
 
@@ -338,7 +338,7 @@ public sealed class MacroEngine
     private enum MacroLineKind
     {
         Tell,
-        Dote,
+        Emote,
         Wait,
     }
 
