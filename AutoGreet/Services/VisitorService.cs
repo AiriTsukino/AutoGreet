@@ -257,6 +257,11 @@ public sealed class VisitorService
                 if (config.AutoGreetEnabled)
                     queue.Enqueue(key, allowDetachedCustomGreeting: customVenueGreeting);
             }
+            else if (VenueService.ContainsKey(session.Ungreeted, key) && !VenueService.ContainsKey(session.Skipped, key) && !VenueService.ContainsKey(session.Greeted, key))
+            {
+                if (config.AutoGreetEnabled)
+                    queue.Enqueue(key, allowDetachedCustomGreeting: customVenueGreeting);
+            }
             else if (ShouldQueueGreetingTimer(session, key, visitor, previousLastSeenUtc, wasAway, now))
             {
                 QueueGreetingTimer(session, key, existing, now, customVenueGreeting);
@@ -381,6 +386,21 @@ public sealed class VisitorService
         if (!VenueService.ContainsKey(session.Ungreeted, key)) session.Ungreeted.Add(key);
         var existing = EnsureSessionVisitor(key);
         existing.HereWhenArrived = false;
+
+        if (config.AutoGreetEnabled && !venue.Blacklist.Contains(key.ToString()))
+        {
+            if (existing.Present)
+            {
+                var customVenueGreeting = detection.IsUsingCustomGreetingAreaFor(key);
+                logs.Info("Manual ungreeted queued", $"{key.Display} was manually moved to Ungreeted while auto-greet is enabled and is currently present, so they were added to the greeting queue.");
+                queue.Enqueue(key, forceStart: true, allowDetachedCustomGreeting: customVenueGreeting);
+            }
+            else
+            {
+                logs.Info("Manual ungreeted waiting", $"{key.Display} was manually moved to Ungreeted, but they are not currently present in the venue. They will queue when they re-enter.");
+            }
+        }
+
         venues.RepairActiveVenueData();
     }
 

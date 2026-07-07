@@ -11,13 +11,14 @@ public sealed class QueueService : IDisposable
     private readonly MacroEngine macroEngine;
     private readonly DetectionService detection;
     private readonly EmoteResumeService emoteResume;
+    private readonly PendingEmoteQueueService pendingEmotes;
     private readonly DiagnosticLogService logs;
     private CancellationTokenSource cts = new();
     private Task? worker;
     private bool workerForceMode;
     private readonly object sync = new();
 
-    public QueueService(Configuration config, VenueService venues, PersistenceService persistence, GreetingService greetings, MacroEngine macroEngine, DetectionService detection, EmoteResumeService emoteResume, DiagnosticLogService logs)
+    public QueueService(Configuration config, VenueService venues, PersistenceService persistence, GreetingService greetings, MacroEngine macroEngine, DetectionService detection, EmoteResumeService emoteResume, PendingEmoteQueueService pendingEmotes, DiagnosticLogService logs)
     {
         this.config = config;
         this.venues = venues;
@@ -26,6 +27,7 @@ public sealed class QueueService : IDisposable
         this.macroEngine = macroEngine;
         this.detection = detection;
         this.emoteResume = emoteResume;
+        this.pendingEmotes = pendingEmotes;
         this.logs = logs;
     }
 
@@ -40,10 +42,12 @@ public sealed class QueueService : IDisposable
         {
             if (venue.Blacklist.Contains(key.ToString())) continue;
             if (VenueService.ContainsKey(venue.Session.Greeted, key) || VenueService.ContainsKey(venue.Session.Skipped, key)) continue;
+            if (!IsVisitorPresent(venue, key)) continue;
             Enqueue(key, forceStart);
         }
 
-        if (forceStart || config.AutoGreetEnabled) EnsureWorker(forceStart);
+        if ((forceStart || config.AutoGreetEnabled) && venue.Queue.Any(q => q.Status == QueueEntryStatus.Waiting))
+            EnsureWorker(forceStart);
     }
 
     public void Enqueue(VisitorKey key, bool forceStart = false, bool? allowDetachedCustomGreeting = null)
@@ -51,6 +55,11 @@ public sealed class QueueService : IDisposable
         var venue = venues.ActiveVenueOrNull;
         if (venue is null) return;
         if (venue.Blacklist.Contains(key.ToString())) return;
+
+        var detachedCustomGreeting = allowDetachedCustomGreeting == true;
+        if (!detachedCustomGreeting && !IsVisitorPresent(venue, key))
+            return;
+
         var existingActiveEntry = venue.Queue.FirstOrDefault(q => string.Equals(q.Visitor.ToString(), key.ToString(), StringComparison.OrdinalIgnoreCase) && q.Status is (QueueEntryStatus.Waiting or QueueEntryStatus.Running) && q.CustomRegionRouteId == Guid.Empty);
         if (existingActiveEntry is not null)
         {
@@ -89,6 +98,12 @@ public sealed class QueueService : IDisposable
         });
         persistence.SaveNow();
         EnsureWorker(forceStart);
+    }
+
+    private static bool IsVisitorPresent(VenueProfile venue, VisitorKey key)
+    {
+        return venue.Session.NightlyVisitors.Any(v =>
+            v.Present && string.Equals(v.Key.ToString(), key.ToString(), StringComparison.OrdinalIgnoreCase));
     }
 
     public void EnqueueCustomRegionMacro(VisitorKey key, Guid routeId, Guid macroId)
@@ -196,11 +211,7 @@ public sealed class QueueService : IDisposable
 
     private async Task ProcessAsync(CancellationToken token)
     {
-        var previousEmoteCommand = await emoteResume.CaptureAsync(token).ConfigureAwait(false);
-
-        try
-        {
-            while (!token.IsCancellationRequested && ShouldProcessQueue())
+        while (!token.IsCancellationRequested && ShouldProcessQueue())
             {
                 if (config.AutoGreetEnabled) EnqueueEligibleUngreeted(false);
 
@@ -214,6 +225,14 @@ public sealed class QueueService : IDisposable
                 var entry = venue.Queue.FirstOrDefault(q => q.Status == QueueEntryStatus.Waiting);
                 if (entry is null)
                 {
+                    await TryRunPendingResumeWhenIdleAsync(venue, token).ConfigureAwait(false);
+
+                    if (emoteResume.HasPendingResume)
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(1), token).ConfigureAwait(false);
+                        continue;
+                    }
+
                     ClearForceModeIfAppropriate();
                     return;
                 }
@@ -297,7 +316,12 @@ public sealed class QueueService : IDisposable
                         ? () => true
                         : () => detection.IsPlayerVisible(entry.Visitor);
 
-                    await macroEngine.ExecuteAsync(entry.Visitor, macro, stillPresent, token, markVisitorGreeted).ConfigureAwait(false);
+                    var macroResult = await macroEngine.ExecuteAsync(entry.Visitor, macro, stillPresent, token, markVisitorGreeted).ConfigureAwait(false);
+                    if (macroResult.HasEmote)
+                        await QueueConfiguredEmoteResumeAfterMacroAsync(macro.Name, entry.Visitor, macroResult).ConfigureAwait(false);
+
+                    if (!hasTell)
+                        greetings.ConfirmNonTellMacroCompleted(entry.Visitor, markVisitorGreeted);
 
                     // RaptureShellModule sends native chat commands directly. Some Dalamud builds do not echo
                     // plugin-originated outgoing tells back through IChatGui.ChatMessage, so successful command
@@ -357,16 +381,45 @@ public sealed class QueueService : IDisposable
                     persistence.SaveNow();
                 }
 
-                await Task.Delay(TimeSpan.FromSeconds(config.QueueDelaySeconds), token).ConfigureAwait(false);
-            }
+                if (!token.IsCancellationRequested && config.QueueDelaySeconds > 0 && venue.Queue.Any(q => q.Status == QueueEntryStatus.Waiting))
+                {
+                    if (entry.Status == QueueEntryStatus.Completed)
+                    {
+                        entry.StatusText = $"Completed - waiting {config.QueueDelaySeconds:0.0}s before next visitor";
+                        persistence.SaveNow();
+                    }
+
+                    await Task.Delay(TimeSpan.FromSeconds(config.QueueDelaySeconds), token).ConfigureAwait(false);
+                }
         }
-        finally
-        {
-            // Resume only after the current manual greet or auto-greet queue worker fully finishes.
-            // Resuming inside MacroEngine can interrupt multi-line macros because native chat commands
-            // are queued through the game shell asynchronously.
-            await emoteResume.ResumeAsync(previousEmoteCommand, CancellationToken.None).ConfigureAwait(false);
-        }
+    }
+
+    private async Task QueueConfiguredEmoteResumeAfterMacroAsync(string macroName, VisitorKey visitor, MacroExecutionResult macroResult)
+    {
+        if (!config.ResumePreviousEmoteEnabled)
+            return;
+
+        var reason = macroResult.QueuedTargetedEmote
+            ? "the macro contained a targeted emote that is waiting for the visitor to become targetable"
+            : "the macro contained an emote";
+
+        logs.Info("Resume emote queued", $"Macro '{macroName}' for {visitor.Display} contained an emote. The configured resume emote will run after the greeting and pending emote queues are clear.");
+        await emoteResume.RequestResumeAfterQueueAsync(macroName, visitor, reason, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private async Task TryRunPendingResumeWhenIdleAsync(VenueProfile venue, CancellationToken token)
+    {
+        if (!emoteResume.HasPendingResume)
+            return;
+
+        var queueIdle = !venue.Queue.Any(q => q.Status is QueueEntryStatus.Waiting or QueueEntryStatus.Running);
+        var emoteQueueIdle = pendingEmotes.PendingCount == 0;
+
+        if (!queueIdle || !emoteQueueIdle)
+            return;
+
+        logs.Info("Resume emote running", "Greeting queue and pending emote queue are clear. Running the configured resume emote.");
+        await emoteResume.RunPendingResumeIfReadyAsync(queueIdle, emoteQueueIdle, token).ConfigureAwait(false);
     }
 
     private static bool HasCustomRegionGreeting(VenueProfile venue, Guid routeId, VisitorKey key)

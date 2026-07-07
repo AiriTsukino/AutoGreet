@@ -50,14 +50,9 @@ internal static class EmoteCommandRegistry
         "emote", "em"
     };
 
-    private static readonly string[] SortedCommands = Commands
-        .OrderBy(command => command, StringComparer.OrdinalIgnoreCase)
-        .Select(command => $"/{command}")
-        .ToArray();
+    public static IReadOnlyList<string> SupportedCommands => Commands.OrderBy(command => command, StringComparer.OrdinalIgnoreCase).Select(command => "/" + command).ToList();
 
-    public static IReadOnlyList<string> SupportedCommands => SortedCommands;
-
-    public static string SupportedCommandsText { get; } = string.Join("\n", SortedCommands);
+    public static string SupportedCommandsText => string.Join("\n", SupportedCommands);
 
     public static bool IsSupportedEmoteLine(string line)
         => TryGetCommandName(line, out var command) && Commands.Contains(command);

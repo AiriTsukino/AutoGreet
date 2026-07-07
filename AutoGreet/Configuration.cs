@@ -17,6 +17,8 @@ public sealed class Configuration : IPluginConfiguration
     public bool LeaveChatNotificationsEnabled { get; set; } = false;
     public bool ResumePreviousEmoteEnabled { get; set; } = false;
     public string ResumeEmoteCommand { get; set; } = string.Empty;
+    public float ResumeEmoteDelaySeconds { get; set; } = 4.0f;
+    public bool UntargetAfterGreeting { get; set; } = false;
     public bool WaitForVisibleTargetBeforeEmote { get; set; } = true;
     public float EmoteTargetWaitSeconds { get; set; } = 8.0f;
     public float GreetingStartDelaySeconds { get; set; } = 3.0f;

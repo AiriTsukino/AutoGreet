@@ -100,6 +100,16 @@ public sealed class GreetingService : IDisposable
 
     public bool MacroHasTell(GreetingMacro macro) => GetTellLines(macro).Any();
 
+    public void ConfirmNonTellMacroCompleted(VisitorKey key, bool markVisitorGreeted)
+    {
+        LastGreetingConfirmation = markVisitorGreeted
+            ? $"Confirmed main non-tell greeting command for {key.Display}."
+            : $"Confirmed non-greeting macro command for {key.Display}.";
+
+        if (markVisitorGreeted)
+            visitorService?.MarkGreeted(key);
+    }
+
     private void OnChatMessage(IHandleableChatMessage chatMessage)
     {
         if (chatMessage.IsHandled || chatMessage.LogKind != XivChatType.TellOutgoing) return;

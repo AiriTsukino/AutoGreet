@@ -20,6 +20,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly SoundService sound;
     private readonly TargetingService targeting;
     private readonly EmoteResumeService emoteResume;
+    private readonly PendingEmoteQueueService pendingEmotes;
     private readonly DiagnosticLogService logs;
     private readonly MacroEngine macroEngine;
     private readonly QueueService queue;
@@ -41,8 +42,9 @@ public sealed class Plugin : IDalamudPlugin
         targeting = new TargetingService();
         emoteResume = new EmoteResumeService(config, chatCommands);
         logs = new DiagnosticLogService();
-        macroEngine = new MacroEngine(config, greetings, chatCommands, targeting, logs);
-        queue = new QueueService(config, venues, persistence, greetings, macroEngine, detection, emoteResume, logs);
+        pendingEmotes = new PendingEmoteQueueService(config, chatCommands, targeting, emoteResume, logs);
+        macroEngine = new MacroEngine(config, greetings, chatCommands, targeting, pendingEmotes, logs);
+        queue = new QueueService(config, venues, persistence, greetings, macroEngine, detection, emoteResume, pendingEmotes, logs);
         visitors = new VisitorService(venues, persistence, queue, detection, config, sound, logs);
         greetings.AttachVisitorService(visitors);
 
@@ -151,6 +153,7 @@ public sealed class Plugin : IDalamudPlugin
         DalamudServices.CommandManager.RemoveHandler(SettingsCommandName);
         windowSystem.RemoveAllWindows();
         queue.Dispose();
+        pendingEmotes.Dispose();
         greetings.Dispose();
         sound.Dispose();
         detection.Dispose();

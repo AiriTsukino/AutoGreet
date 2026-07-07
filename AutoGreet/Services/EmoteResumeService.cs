@@ -1,12 +1,19 @@
+using AutoGreet.Models;
+
 namespace AutoGreet.Services;
 
 /// <summary>
-/// Runs a user-configured slash command after AutoGreet finishes a greeting queue/manual greet.
+/// Runs a user-configured slash command after AutoGreet finishes greeting and emote queues.
 /// </summary>
 public sealed class EmoteResumeService
 {
     private readonly Configuration config;
     private readonly ChatCommandService chatCommands;
+    private readonly object sync = new();
+    private bool pendingResume;
+    private string? pendingResumeCommand;
+    private string pendingResumeReason = string.Empty;
+    private DateTimeOffset pendingResumeNotBeforeUtc;
 
     public string LastStatus { get; private set; } = "Resume emote has not run yet.";
     public string LastCapturedCommand { get; private set; } = string.Empty;
@@ -16,6 +23,15 @@ public sealed class EmoteResumeService
     {
         this.config = config;
         this.chatCommands = chatCommands;
+    }
+
+    public bool HasPendingResume
+    {
+        get
+        {
+            lock (sync)
+                return pendingResume;
+        }
     }
 
     public Task<string?> CaptureAsync(CancellationToken token)
@@ -35,6 +51,76 @@ public sealed class EmoteResumeService
             ? "Resume emote is enabled, but no slash command is configured."
             : $"Configured resume emote command: {command}";
         return Task.FromResult(command);
+    }
+
+    public async Task RequestResumeAfterQueueAsync(string macroName, VisitorKey visitor, string reason, CancellationToken token)
+    {
+        var command = await CaptureAsync(token).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(command))
+            return;
+
+        var delaySeconds = Math.Clamp(config.ResumeEmoteDelaySeconds, 0.5f, 15.0f);
+
+        lock (sync)
+        {
+            pendingResume = true;
+            pendingResumeCommand = command;
+            pendingResumeReason = string.IsNullOrWhiteSpace(reason)
+                ? $"Macro '{macroName}' for {visitor.Display} contained an emote."
+                : $"Macro '{macroName}' for {visitor.Display}: {reason}.";
+            pendingResumeNotBeforeUtc = DateTimeOffset.UtcNow.AddSeconds(delaySeconds);
+        }
+
+        LastStatus = $"Resume emote queued until AutoGreet queues are clear and the emote buffer has passed: {command}";
+    }
+
+    public async Task<bool> RunPendingResumeIfReadyAsync(bool queueIdle, bool emoteQueueIdle, CancellationToken token)
+    {
+        if (!config.ResumePreviousEmoteEnabled)
+        {
+            lock (sync)
+            {
+                pendingResume = false;
+                pendingResumeCommand = null;
+                pendingResumeReason = string.Empty;
+                pendingResumeNotBeforeUtc = default;
+            }
+
+            return false;
+        }
+
+        if (!queueIdle || !emoteQueueIdle)
+            return false;
+
+        string? command;
+        string reason;
+        lock (sync)
+        {
+            if (!pendingResume || string.IsNullOrWhiteSpace(pendingResumeCommand))
+                return false;
+
+            var now = DateTimeOffset.UtcNow;
+            if (pendingResumeNotBeforeUtc > now)
+            {
+                var remaining = pendingResumeNotBeforeUtc - now;
+                LastStatus = $"Resume emote is waiting for the current emote to finish. About {remaining.TotalSeconds:0.0}s remaining.";
+                return false;
+            }
+
+            command = pendingResumeCommand;
+            reason = pendingResumeReason;
+            pendingResume = false;
+            pendingResumeCommand = null;
+            pendingResumeReason = string.Empty;
+            pendingResumeNotBeforeUtc = default;
+        }
+
+        LastStatus = string.IsNullOrWhiteSpace(reason)
+            ? $"Running queued resume emote: {command}"
+            : $"Running queued resume emote after queues cleared. {reason}";
+
+        await ResumeAsync(command, token).ConfigureAwait(false);
+        return true;
     }
 
     public async Task ResumeAsync(string? command, CancellationToken token)

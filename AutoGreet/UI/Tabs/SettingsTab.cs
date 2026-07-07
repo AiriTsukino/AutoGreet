@@ -185,12 +185,12 @@ internal sealed class SettingsTab
         UiHelpers.Section("Greeting behavior");
 
         var resumeEmote = config.ResumePreviousEmoteEnabled;
-        if (ImGui.Checkbox("Resume emote after greeting", ref resumeEmote))
+        if (ImGui.Checkbox("Resume emote after greeting emotes", ref resumeEmote))
         {
             config.ResumePreviousEmoteEnabled = resumeEmote;
             persistence.SaveNow();
         }
-        UiHelpers.TooltipOnHover("After AutoGreet finishes a manual greeting or queued auto-greeting, AutoGreet runs the slash command entered below.");
+        UiHelpers.TooltipOnHover("After AutoGreet sends an emote from a greeting macro, AutoGreet runs the slash command entered below.");
 
         var resumeCommand = config.ResumeEmoteCommand;
         ImGui.SetNextItemWidth(240f);
@@ -205,25 +205,32 @@ internal sealed class SettingsTab
         }
         UiHelpers.TooltipOnHover("Example: /beesknees, /hum, /mandervilledance, /sit.");
 
+        if (!config.ResumePreviousEmoteEnabled) ImGui.BeginDisabled();
+        var resumeDelay = Math.Clamp(config.ResumeEmoteDelaySeconds, 0.5f, 15.0f);
+        ImGui.SetNextItemWidth(220f);
+        if (ImGui.SliderFloat("Resume emote delay", ref resumeDelay, 0.5f, 15.0f, "%.1f sec"))
+        {
+            config.ResumeEmoteDelaySeconds = Math.Clamp(resumeDelay, 0.5f, 15.0f);
+            persistence.SaveNow();
+        }
+        UiHelpers.TooltipOnHover("How long AutoGreet waits after the last greeting emote is sent before running the configured resume emote command.");
+        if (!config.ResumePreviousEmoteEnabled) ImGui.EndDisabled();
+
+        var untarget = config.UntargetAfterGreeting;
+        if (ImGui.Checkbox("Untarget after greeting", ref untarget))
+        {
+            config.UntargetAfterGreeting = untarget;
+            persistence.SaveNow();
+        }
+        UiHelpers.TooltipOnHover("Clears your current target after AutoGreet finishes a greeting target action, such as a targeted emote.");
+
         var waitForTarget = config.WaitForVisibleTargetBeforeEmote;
-        if (ImGui.Checkbox("Wait for emote target to load", ref waitForTarget))
+        if (ImGui.Checkbox("Queue targeted emotes until targetable", ref waitForTarget))
         {
             config.WaitForVisibleTargetBeforeEmote = waitForTarget;
             persistence.SaveNow();
         }
-        UiHelpers.TooltipOnHover("When enabled, AutoGreet waits for the visitor to be visible and targetable before running emotes like /dote <t>. This helps when someone enters but their character has not rendered on your screen yet.");
-
-        if (config.WaitForVisibleTargetBeforeEmote)
-        {
-            var waitSeconds = config.EmoteTargetWaitSeconds;
-            ImGui.SetNextItemWidth(180f);
-            if (ImGui.SliderFloat("Emote target wait seconds", ref waitSeconds, 1f, 30f, "%.0f sec"))
-            {
-                config.EmoteTargetWaitSeconds = Math.Clamp(waitSeconds, 1f, 30f);
-                persistence.SaveNow();
-            }
-            UiHelpers.TooltipOnHover("Maximum time AutoGreet will wait for the next greeted visitor to become visible before running an emote command. If they leave first, the greeting is cancelled normally.");
-        }
+        UiHelpers.TooltipOnHover("When enabled, targeted emotes such as /dote <t> are held in an emote queue until AutoGreet can target the correct visitor. The queue checks pending emotes every 3 seconds.");
 
         var greetingTimer = config.GreetingTimerEnabled;
         if (ImGui.Checkbox("Greeting timer for returning visitors", ref greetingTimer))

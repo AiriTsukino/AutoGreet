@@ -11,74 +11,114 @@ public sealed class MacroSyntaxException : Exception
     }
 }
 
+public sealed record MacroExecutionResult(bool HasEmote, bool QueuedTargetedEmote, bool TargetedPlayer);
+
 public sealed class MacroEngine
 {
+    private static readonly TimeSpan TargetedEmoteTargetHold = TimeSpan.FromSeconds(1.75);
     private static readonly Regex InlineWaitRegex = new(@"<wait\.(?<seconds>\d+(?:\.\d+)?)>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private readonly Configuration config;
     private readonly GreetingService greetings;
     private readonly ChatCommandService chatCommands;
     private readonly TargetingService targeting;
+    private readonly PendingEmoteQueueService pendingEmotes;
     private readonly DiagnosticLogService logs;
 
-    public MacroEngine(Configuration config, GreetingService greetings, ChatCommandService chatCommands, TargetingService targeting, DiagnosticLogService logs)
+    public MacroEngine(Configuration config, GreetingService greetings, ChatCommandService chatCommands, TargetingService targeting, PendingEmoteQueueService pendingEmotes, DiagnosticLogService logs)
     {
         this.config = config;
         this.greetings = greetings;
         this.chatCommands = chatCommands;
         this.targeting = targeting;
+        this.pendingEmotes = pendingEmotes;
         this.logs = logs;
     }
 
-    public async Task ExecuteAsync(VisitorKey target, GreetingMacro macro, Func<bool> stillPresent, CancellationToken token, bool markVisitorGreeted = true)
+    public async Task<MacroExecutionResult> ExecuteAsync(VisitorKey target, GreetingMacro macro, Func<bool> stillPresent, CancellationToken token, bool markVisitorGreeted = true)
     {
         var parsedLines = ValidateAndParse(macro);
+        var hasEmote = parsedLines.Any(p => p.Kind == MacroLineKind.Emote);
+        var queuedTargetedEmote = false;
+        var targetedPlayer = false;
+        DateTimeOffset? lastTargetedEmoteSentUtc = null;
+
         logs.Info("Macro execution started", $"Running macro '{macro.Name}' for {target.Display}. Parsed lines: {parsedLines.Count}.");
 
-        foreach (var parsed in parsedLines)
+        try
         {
-            token.ThrowIfCancellationRequested();
-
-            if (!stillPresent())
+            foreach (var parsed in parsedLines)
             {
-                logs.Warning("Macro target not present", $"Macro '{macro.Name}' stopped before sending the next command because {target.Display} was no longer present in the required detection area.");
-                throw new OperationCanceledException("Target left before greeting completed.", token);
+                token.ThrowIfCancellationRequested();
+
+                if (!stillPresent())
+                {
+                    logs.Warning("Macro target not present", $"Macro '{macro.Name}' stopped before sending the next command because {target.Display} was no longer present in the required detection area.");
+                    throw new OperationCanceledException("Target left before greeting completed.", token);
+                }
+
+                if (parsed.WaitOnlySeconds is not null)
+                {
+                    await DelaySecondsAsync(parsed.WaitOnlySeconds.Value, token).ConfigureAwait(false);
+                    continue;
+                }
+
+                var command = BuildCommand(parsed.Line, target, macro.Name, out var tellText);
+                if (tellText is not null)
+                    greetings.RegisterExpectedTell(target, tellText, markVisitorGreeted);
+
+                if (parsed.Kind == MacroLineKind.Emote && EmoteCommandRegistry.RequiresVisibleTarget(parsed.Line))
+                {
+                    if (config.WaitForVisibleTargetBeforeEmote)
+                    {
+                        pendingEmotes.Enqueue(target, command, macro.Name);
+                        queuedTargetedEmote = true;
+
+                        if (parsed.InlineWaitSeconds is not null)
+                            await DelaySecondsAsync(parsed.InlineWaitSeconds.Value, token).ConfigureAwait(false);
+                        else
+                            await Task.Delay(250, token).ConfigureAwait(false);
+
+                        continue;
+                    }
+
+                    var targetedForEmote = await targeting.TargetAndVerifyAsync(target, token).ConfigureAwait(false);
+                    if (!targetedForEmote)
+                        throw new InvalidOperationException($"Could not target visible player {target.Display} for emote command: {parsed.Line}");
+
+                    targetedPlayer = true;
+                    await Task.Delay(300, token).ConfigureAwait(false);
+                }
+
+                logs.Info("Sending macro command", $"Macro '{macro.Name}' sending command for {target.Display}: {command}");
+                await SendCommandAsync(command, token).ConfigureAwait(false);
+                if (parsed.Kind == MacroLineKind.Emote && EmoteCommandRegistry.RequiresVisibleTarget(parsed.Line))
+                    lastTargetedEmoteSentUtc = DateTimeOffset.UtcNow;
+
+                logs.Info("Macro command sent", $"Macro '{macro.Name}' sent command for {target.Display}: {command}");
+                if (tellText is not null)
+                    greetings.ConfirmTellCommandSent(target, tellText, markVisitorGreeted);
+
+                if (parsed.InlineWaitSeconds is not null)
+                    await DelaySecondsAsync(parsed.InlineWaitSeconds.Value, token).ConfigureAwait(false);
+                else
+                    await Task.Delay(250, token).ConfigureAwait(false);
             }
-
-            if (parsed.WaitOnlySeconds is not null)
-            {
-                await DelaySecondsAsync(parsed.WaitOnlySeconds.Value, token).ConfigureAwait(false);
-                continue;
-            }
-
-            var command = BuildCommand(parsed.Line, target, macro.Name, out var tellText);
-            if (tellText is not null)
-                greetings.RegisterExpectedTell(target, tellText, markVisitorGreeted);
-
-            if (parsed.Kind == MacroLineKind.Emote && EmoteCommandRegistry.RequiresVisibleTarget(parsed.Line))
-            {
-                var targetedForEmote = config.WaitForVisibleTargetBeforeEmote
-                    ? await targeting.WaitForTargetAsync(target, stillPresent, config.EmoteTargetWaitSeconds, token).ConfigureAwait(false)
-                    : await targeting.TargetAsync(target, token).ConfigureAwait(false);
-
-                if (!targetedForEmote)
-                    throw new InvalidOperationException($"Could not target visible player {target.Display} for emote command: {parsed.Line}");
-
-                await Task.Delay(200, token).ConfigureAwait(false);
-            }
-
-            logs.Info("Sending macro command", $"Macro '{macro.Name}' sending command for {target.Display}: {command}");
-            await SendCommandAsync(command, token).ConfigureAwait(false);
-            logs.Info("Macro command sent", $"Macro '{macro.Name}' sent command for {target.Display}: {command}");
-            if (tellText is not null)
-                greetings.ConfirmTellCommandSent(target, tellText, markVisitorGreeted);
-
-            if (parsed.InlineWaitSeconds is not null)
-                await DelaySecondsAsync(parsed.InlineWaitSeconds.Value, token).ConfigureAwait(false);
-            else
-                await Task.Delay(250, token).ConfigureAwait(false);
         }
+        finally
+        {
+            if (targetedPlayer && config.UntargetAfterGreeting)
+            {
+                await HoldTargetAfterTargetedEmoteAsync(lastTargetedEmoteSentUtc, CancellationToken.None).ConfigureAwait(false);
+                await targeting.ClearTargetAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+        }
+
+        return new MacroExecutionResult(hasEmote, queuedTargetedEmote, targetedPlayer);
     }
+
+    public bool MacroHasEmote(GreetingMacro macro)
+        => ValidateAndParse(macro).Any(p => p.Kind == MacroLineKind.Emote);
 
     public IReadOnlyList<MacroSyntaxIssue> Validate(GreetingMacro macro)
     {
@@ -106,8 +146,13 @@ public sealed class MacroEngine
             if (TryParseWaitCommand(line, out _))
                 continue;
 
-            if (IsTellToTarget(line) || EmoteCommandRegistry.IsSupportedEmoteLine(line))
+            string? chatIssue = null;
+            if (IsTellToTarget(line) || IsSupportedChatLine(line, out chatIssue) || EmoteCommandRegistry.IsSupportedEmoteLine(line))
+            {
+                if (chatIssue is not null)
+                    issues.Add(new MacroSyntaxIssue(lineNumber, original, chatIssue));
                 continue;
+            }
 
             issues.Add(new MacroSyntaxIssue(lineNumber, original, "This line does not match AutoGreet's supported macro syntax."));
         }
@@ -150,6 +195,15 @@ public sealed class MacroEngine
             if (IsTellToTarget(line))
             {
                 parsed.Add(new ParsedMacroLine(MacroLineKind.Tell, line, null, inlineWaitSeconds));
+                continue;
+            }
+
+            if (IsSupportedChatLine(line, out var chatIssue))
+            {
+                if (chatIssue is not null)
+                    ThrowSyntax(macro, lineNumber, original, chatIssue);
+
+                parsed.Add(new ParsedMacroLine(MacroLineKind.Chat, line, null, inlineWaitSeconds));
                 continue;
             }
 
@@ -255,29 +309,51 @@ public sealed class MacroEngine
     {
         tellText = null;
 
-        if (TryReadTellLine(line, "/tell <t>", 9, out tellText))
+        if (TryReadLine(line, "/tell <t>", 9, out tellText))
             return true;
 
-        if (TryReadTellLine(line, "/tell <playername>", 18, out tellText))
+        if (TryReadLine(line, "/tell <playername>", 18, out tellText))
             return true;
 
-        if (TryReadTellLine(line, "/t <t>", 6, out tellText))
+        if (TryReadLine(line, "/t <t>", 6, out tellText))
             return true;
 
-        if (TryReadTellLine(line, "/t <playername>", 15, out tellText))
+        if (TryReadLine(line, "/t <playername>", 15, out tellText))
             return true;
 
         return false;
     }
 
-    private static bool TryReadTellLine(string line, string prefix, int messageStartIndex, out string? tellText)
+    private static bool IsSupportedChatLine(string line, out string? issue)
     {
-        tellText = null;
+        issue = null;
+        var supported = TryReadLine(line, "/say", 4, out _)
+                        || TryReadLine(line, "/s", 2, out _)
+                        || TryReadLine(line, "/shout", 6, out _)
+                        || TryReadLine(line, "/sh", 3, out _)
+                        || TryReadLine(line, "/yell", 5, out _)
+                        || TryReadLine(line, "/y", 2, out _);
+
+        if (!supported)
+            return false;
+
+        if (line.Contains("<t>", StringComparison.OrdinalIgnoreCase))
+            issue = "Use <playername> instead of <t> in /say, /shout, or /yell macros. AutoGreet does not target players for non-tell chat channels.";
+
+        return true;
+    }
+
+    private static bool TryReadLine(string line, string prefix, int messageStartIndex, out string? message)
+    {
+        message = null;
         if (!line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             return false;
 
-        tellText = line[messageStartIndex..].Trim();
-        return !string.IsNullOrWhiteSpace(tellText);
+        if (line.Length > prefix.Length && !char.IsWhiteSpace(line[prefix.Length]))
+            return false;
+
+        message = line.Length > messageStartIndex ? line[messageStartIndex..].Trim() : string.Empty;
+        return !string.IsNullOrWhiteSpace(message);
     }
 
     private static bool IsDote(string line)
@@ -315,12 +391,6 @@ public sealed class MacroEngine
         if (rest.StartsWith(".", StringComparison.Ordinal))
             rest = rest[1..].Trim();
 
-        // Support all of these forms:
-        // /wait
-        // /wait 1
-        // /wait1
-        // /wait.1
-        // /wait.02
         if (string.IsNullOrWhiteSpace(rest))
             return true;
 
@@ -332,12 +402,27 @@ public sealed class MacroEngine
         return true;
     }
 
+    private static async Task HoldTargetAfterTargetedEmoteAsync(DateTimeOffset? sentUtc, CancellationToken token)
+    {
+        if (sentUtc is null)
+        {
+            await Task.Delay(TargetedEmoteTargetHold, token).ConfigureAwait(false);
+            return;
+        }
+
+        var elapsed = DateTimeOffset.UtcNow - sentUtc.Value;
+        var remaining = TargetedEmoteTargetHold - elapsed;
+        if (remaining > TimeSpan.Zero)
+            await Task.Delay(remaining, token).ConfigureAwait(false);
+    }
+
     private static Task DelaySecondsAsync(double seconds, CancellationToken token)
         => Task.Delay(TimeSpan.FromSeconds(Math.Clamp(seconds, 0, 10)), token);
 
     private enum MacroLineKind
     {
         Tell,
+        Chat,
         Emote,
         Wait,
     }
