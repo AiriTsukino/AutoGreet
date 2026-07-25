@@ -79,7 +79,7 @@ public sealed class VisitorService
         if (config.ChatNotificationsEnabled)
             DalamudServices.ChatGui.Print($"[AutoGreet] {key.Display} was already in {venue.Name} when you arrived.");
 
-        venues.RepairActiveVenueData();
+        RepairAndRequestSave();
     }
 
     public void OnPlayerDoorbellEntered(VisitorKey key)
@@ -146,7 +146,7 @@ public sealed class VisitorService
         if (config.ChatNotificationsEnabled)
             DalamudServices.ChatGui.Print($"[AutoGreet] {key.Display} entered {venue.Name}.");
 
-        venues.RepairActiveVenueData();
+        RepairAndRequestSave();
     }
 
     private void NotifyPausedMonitorEntry(VisitorKey key)
@@ -231,7 +231,7 @@ public sealed class VisitorService
                 session.Ungreeted.Add(key);
 
             if (config.AutoGreetEnabled && !VenueService.ContainsKey(session.Greeted, key) && !VenueService.ContainsKey(session.Skipped, key))
-                queue.Enqueue(key, allowDetachedCustomGreeting: customVenueGreeting);
+                queue.Enqueue(key, allowDetachedCustomGreeting: customVenueGreeting, deferSave: true);
         }
         else
         {
@@ -249,18 +249,18 @@ public sealed class VisitorService
                     session.Ungreeted.Add(key);
 
                 if (config.AutoGreetEnabled)
-                    queue.Enqueue(key, allowDetachedCustomGreeting: customVenueGreeting);
+                    queue.Enqueue(key, allowDetachedCustomGreeting: customVenueGreeting, deferSave: true);
             }
             else if (!VenueService.ContainsKey(session.Greeted, key) && !VenueService.ContainsKey(session.Skipped, key) && !VenueService.ContainsKey(session.Ungreeted, key))
             {
                 session.Ungreeted.Add(key);
                 if (config.AutoGreetEnabled)
-                    queue.Enqueue(key, allowDetachedCustomGreeting: customVenueGreeting);
+                    queue.Enqueue(key, allowDetachedCustomGreeting: customVenueGreeting, deferSave: true);
             }
             else if (VenueService.ContainsKey(session.Ungreeted, key) && !VenueService.ContainsKey(session.Skipped, key) && !VenueService.ContainsKey(session.Greeted, key))
             {
                 if (config.AutoGreetEnabled)
-                    queue.Enqueue(key, allowDetachedCustomGreeting: customVenueGreeting);
+                    queue.Enqueue(key, allowDetachedCustomGreeting: customVenueGreeting, deferSave: true);
             }
             else if (ShouldQueueGreetingTimer(session, key, visitor, previousLastSeenUtc, wasAway, now))
             {
@@ -276,7 +276,7 @@ public sealed class VisitorService
             }
         }
 
-        venues.RepairActiveVenueData();
+        RepairAndRequestSave();
     }
 
 
@@ -305,9 +305,9 @@ public sealed class VisitorService
         state.ReturningThisSession = HasBeenGreetedBefore(visitor);
 
         if (config.AutoGreetEnabled && (!session.CustomRegionGreetings.TryGetValue(routeId, out var greetedForRoute) || !VenueService.ContainsKey(greetedForRoute, key)))
-            queue.EnqueueCustomRegionMacro(key, routeId, route.MacroId);
+            queue.EnqueueCustomRegionMacro(key, routeId, route.MacroId, deferSave: true);
 
-        venues.RepairActiveVenueData();
+        RepairAndRequestSave();
     }
 
     public void OnPlayerLeft(VisitorKey key)
@@ -337,8 +337,8 @@ public sealed class VisitorService
             DalamudServices.ChatGui.Print($"[AutoGreet] {prefix}{key.Display} left {venue.Name}.");
         }
 
-        queue.Cancel(key, "Visitor left");
-        venues.RepairActiveVenueData();
+        queue.Cancel(key, "Visitor left", deferSave: true);
+        RepairAndRequestSave();
     }
 
     public void MarkGreeted(VisitorKey key)
@@ -361,6 +361,12 @@ public sealed class VisitorService
         existing.HereWhenArrived = false;
         existing.ReturningThisSession = false;
         venues.RepairActiveVenueData();
+    }
+
+    private void RepairAndRequestSave()
+    {
+        venues.RepairActiveVenueData(save: false);
+        persistence.RequestSave();
     }
 
     public void Skip(VisitorKey key)
@@ -421,10 +427,19 @@ public sealed class VisitorService
     {
         var venue = venues.ActiveVenueOrNull;
         if (venue is null) return;
+        SetVipTier(key, isVip ? venue.GetDefaultVipTier().Id : Guid.Empty);
+    }
+
+    public void SetVipTier(VisitorKey key, Guid tierId)
+    {
+        var venue = venues.ActiveVenueOrNull;
+        if (venue is null) return;
         if (!venue.LifetimeVisitors.TryGetValue(key.ToString(), out var visitor))
             visitor = Visitor.FromKey(key);
 
-        visitor.Vip = isVip;
+        var tier = tierId == Guid.Empty ? null : venue.GetVipTier(tierId);
+        visitor.Vip = tier is not null;
+        visitor.VipTierId = tier?.Id ?? Guid.Empty;
         visitor.LastSeenUtc = DateTimeOffset.UtcNow;
         venue.LifetimeVisitors[key.ToString()] = visitor;
         venues.RepairActiveVenueData();
@@ -434,7 +449,7 @@ public sealed class VisitorService
     {
         var venue = venues.ActiveVenueOrNull;
         if (venue is null) return;
-        var currentlyVip = venue.LifetimeVisitors.TryGetValue(key.ToString(), out var visitor) && visitor.Vip;
+        var currentlyVip = venue.LifetimeVisitors.TryGetValue(key.ToString(), out var visitor) && (visitor.Vip || visitor.VipTierId != Guid.Empty);
         SetVip(key, !currentlyVip);
     }
 
@@ -631,7 +646,7 @@ public sealed class VisitorService
 
         logs.Info("Greeting timer queued", $"{key.Display} was queued for a returning greeting because their greeting timer reached {GetGreetingTimerMinutes()} minutes since their last main greeting.");
         if (config.AutoGreetEnabled)
-            queue.Enqueue(key, allowDetachedCustomGreeting: customVenueGreeting);
+            queue.Enqueue(key, allowDetachedCustomGreeting: customVenueGreeting, deferSave: true);
     }
 
     private int GetGreetingTimerMinutes() => Math.Clamp(config.GreetingTimerMinutes, 1, 360);
@@ -673,7 +688,7 @@ public sealed class VisitorService
                 existing.HereWhenArrived = true;
         }
 
-        venues.RepairActiveVenueData();
+        RepairAndRequestSave();
     }
 
     private SessionVisitorState EnsureSessionVisitor(VisitorKey key)

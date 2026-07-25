@@ -10,6 +10,7 @@ public sealed class Visitor
     public DateTimeOffset LastGreetedUtc { get; set; } = DateTimeOffset.MinValue;
     public int TotalVisitCount { get; set; }
     public bool Vip { get; set; }
+    public Guid VipTierId { get; set; }
     public bool HasBeenGreeted { get; set; }
     public string Notes { get; set; } = string.Empty;
 

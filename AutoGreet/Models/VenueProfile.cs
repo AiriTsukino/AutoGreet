@@ -13,6 +13,9 @@ public sealed class VenueProfile
     public Guid ActiveReturningMacroId { get; set; }
     public Guid ActiveVipMacroId { get; set; }
     public Guid ActiveBlacklistedMacroId { get; set; }
+    public Guid DefaultVipTierId { get; set; }
+    public List<VipTierDefinition> VipTiers { get; set; } = [];
+    public Dictionary<Guid, Guid> ActiveVipMacroIdsByTier { get; set; } = [];
     public HashSet<string> Blacklist { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public List<QueueEntry> Queue { get; set; } = [];
     public VenuePlotLock PlotLock { get; set; } = new();
@@ -73,18 +76,61 @@ public sealed class VenueProfile
         }
     }
 
+    public VipTierDefinition GetDefaultVipTier()
+    {
+        var tier = VipTiers.FirstOrDefault(x => x.Id == DefaultVipTierId)
+                   ?? VipTiers.FirstOrDefault();
+        if (tier is not null)
+        {
+            DefaultVipTierId = tier.Id;
+            return tier;
+        }
+
+        tier = new VipTierDefinition();
+        VipTiers.Add(tier);
+        DefaultVipTierId = tier.Id;
+        return tier;
+    }
+
+    public VipTierDefinition? GetVipTier(Guid tierId) =>
+        VipTiers.FirstOrDefault(x => x.Id == tierId);
+
+    public Guid GetActiveVipMacroId(Guid tierId) =>
+        ActiveVipMacroIdsByTier.TryGetValue(tierId, out var macroId)
+            ? macroId
+            : Guid.Empty;
+
+    public void SetActiveVipMacroId(Guid tierId, Guid macroId)
+    {
+        if (tierId == Guid.Empty)
+            return;
+
+        if (macroId == Guid.Empty)
+            ActiveVipMacroIdsByTier.Remove(tierId);
+        else
+            ActiveVipMacroIdsByTier[tierId] = macroId;
+
+        if (tierId == DefaultVipTierId)
+            ActiveVipMacroId = macroId;
+    }
+
     public static VenueProfile CreateDefault(string name)
     {
         var profile = GreetingProfile.CreateDefault();
+        var defaultVipTier = new VipTierDefinition();
         var venue = new VenueProfile
         {
             Name = name,
             GreetingProfiles = [profile],
             ActiveGreetingProfileId = profile.Id,
+            DefaultVipTierId = defaultVipTier.Id,
+            VipTiers = [defaultVipTier],
         };
         venue.ActiveFirstTimeMacroId = profile.Macros.FirstOrDefault(m => m.Category == GreetingCategory.FirstTime)?.Id ?? Guid.Empty;
         venue.ActiveReturningMacroId = profile.Macros.FirstOrDefault(m => m.Category == GreetingCategory.Returning)?.Id ?? Guid.Empty;
         venue.ActiveVipMacroId = profile.Macros.FirstOrDefault(m => m.Category == GreetingCategory.Vip)?.Id ?? Guid.Empty;
+        if (venue.ActiveVipMacroId != Guid.Empty)
+            venue.ActiveVipMacroIdsByTier[defaultVipTier.Id] = venue.ActiveVipMacroId;
         venue.ActiveBlacklistedMacroId = Guid.Empty;
         return venue;
     }

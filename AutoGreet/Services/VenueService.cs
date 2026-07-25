@@ -139,10 +139,10 @@ public sealed class VenueService
         if (save) persistence.SaveNow();
     }
 
-    public void RepairActiveVenueData()
+    public void RepairActiveVenueData(bool save = true)
     {
         RepairVenueData(ActiveVenue);
-        persistence.SaveNow();
+        if (save) persistence.SaveNow();
     }
 
     public void RepairVenueData(VenueProfile venue)
@@ -179,7 +179,7 @@ public sealed class VenueService
 
         EnsureActiveMacroSelection(venue, GreetingCategory.FirstTime);
         EnsureActiveMacroSelection(venue, GreetingCategory.Returning);
-        EnsureActiveMacroSelection(venue, GreetingCategory.Vip);
+        RepairVipTierData(venue);
         venue.ActiveBlacklistedMacroId = Guid.Empty;
         if (venue.VisitorListRegionId == Guid.Empty && venue.DoorbellRegionId != Guid.Empty)
             venue.VisitorListRegionId = venue.DoorbellRegionId;
@@ -260,6 +260,78 @@ public sealed class VenueService
             if (route.MacroId != Guid.Empty && !enabledMacroIds.Contains(route.MacroId))
                 route.MacroId = Guid.Empty;
         }
+    }
+
+    private void RepairVipTierData(VenueProfile venue)
+    {
+        venue.VipTiers ??= [];
+        venue.ActiveVipMacroIdsByTier ??= [];
+        venue.VipTiers = venue.VipTiers
+            .Where(t => t is not null && t.Id != Guid.Empty)
+            .GroupBy(t => t.Id)
+            .Select(g => g.First())
+            .ToList();
+
+        if (venue.VipTiers.Count == 0)
+            venue.VipTiers.Add(new VipTierDefinition());
+
+        if (venue.VipTiers.All(t => t.Id != venue.DefaultVipTierId))
+            venue.DefaultVipTierId = venue.VipTiers[0].Id;
+
+        var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var tier in venue.VipTiers)
+        {
+            var baseName = string.IsNullOrWhiteSpace(tier.Name) ? "VIP" : tier.Name.Trim();
+            var name = baseName;
+            var suffix = 2;
+            while (!usedNames.Add(name))
+                name = $"{baseName} ({suffix++})";
+            tier.Name = name;
+        }
+
+        var defaultTierId = venue.DefaultVipTierId;
+        var validTierIds = venue.VipTiers.Select(t => t.Id).ToHashSet();
+        foreach (var visitor in venue.LifetimeVisitors.Values)
+        {
+            if (visitor.Vip || visitor.VipTierId != Guid.Empty)
+            {
+                visitor.Vip = true;
+                if (!validTierIds.Contains(visitor.VipTierId))
+                    visitor.VipTierId = defaultTierId;
+            }
+            else
+            {
+                visitor.VipTierId = Guid.Empty;
+            }
+        }
+
+        var profile = GetGreetingProfileForVenue(venue);
+        var enabledVipMacros = profile.Macros
+            .Where(m => m.Enabled && m.Category == GreetingCategory.Vip)
+            .ToList();
+        var validVipMacroIds = enabledVipMacros.Select(m => m.Id).ToHashSet();
+
+        foreach (var tierId in venue.ActiveVipMacroIdsByTier.Keys.ToArray())
+        {
+            if (!validTierIds.Contains(tierId) || !validVipMacroIds.Contains(venue.ActiveVipMacroIdsByTier[tierId]))
+                venue.ActiveVipMacroIdsByTier.Remove(tierId);
+        }
+
+        if (!venue.ActiveVipMacroIdsByTier.ContainsKey(defaultTierId)
+            && venue.ActiveVipMacroId != Guid.Empty
+            && validVipMacroIds.Contains(venue.ActiveVipMacroId))
+        {
+            venue.ActiveVipMacroIdsByTier[defaultTierId] = venue.ActiveVipMacroId;
+        }
+
+        if (!venue.ActiveVipMacroIdsByTier.ContainsKey(defaultTierId))
+        {
+            var fallback = enabledVipMacros.FirstOrDefault()?.Id ?? Guid.Empty;
+            if (fallback != Guid.Empty)
+                venue.ActiveVipMacroIdsByTier[defaultTierId] = fallback;
+        }
+
+        venue.ActiveVipMacroId = venue.GetActiveVipMacroId(defaultTierId);
     }
 
     private static List<GreetingProfile> MergeDuplicateGreetingProfiles(VenueProfile venue)

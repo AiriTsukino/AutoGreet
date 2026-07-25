@@ -123,7 +123,7 @@ internal sealed class MainTab
         DrawGreetingProfileSelector(venue);
         DrawMacroSelector(venue, GreetingCategory.FirstTime, "Active first-time macro");
         DrawMacroSelector(venue, GreetingCategory.Returning, "Active returning macro");
-        DrawMacroSelector(venue, GreetingCategory.Vip, "Active VIP macro");
+        DrawVipMacroSelector(venue);
         UiHelpers.TextDisabledWrapped("Blacklisted visitors are excluded from auto-greeting.");
 
         ImGui.Text($"Lifetime unique: {venue.LifetimeVisitors.Count}   Session visitors: {session.NightlyVisitors.Count}   Greeted: {session.Greeted.Count}   Ungreeted: {session.Ungreeted.Count}   Queue: {venue.Queue.Count(q => q.Status == QueueEntryStatus.Waiting)}");
@@ -258,15 +258,79 @@ internal sealed class MainTab
         }
     }
 
+    private void DrawVipMacroSelector(VenueProfile venue)
+    {
+        var profile = venues.GetGreetingProfileForVenue(venue);
+        var macros = profile.Macros
+            .Where(m => m.Enabled && m.Category == GreetingCategory.Vip)
+            .ToList();
+        var tiers = venue.VipTiers.ToArray();
+        var configuredCount = tiers.Count(tier =>
+            venue.GetActiveVipMacroId(tier.Id) is var macroId
+            && macroId != Guid.Empty
+            && macros.Any(m => m.Id == macroId));
+
+        string preview;
+        if (tiers.Length == 1)
+        {
+            var selectedId = venue.GetActiveVipMacroId(tiers[0].Id);
+            preview = macros.FirstOrDefault(m => m.Id == selectedId)?.Name ?? "None configured";
+        }
+        else
+        {
+            preview = $"{configuredCount} of {tiers.Length} tiers configured";
+        }
+
+        ImGui.SetNextItemWidth(280);
+        var comboOpen = ImGui.BeginCombo("Active VIP macros", preview);
+        UiHelpers.TooltipOnHover("Choose one active VIP macro for each tier. The selector stays open so multiple tiers can be configured together.");
+        if (!comboOpen)
+            return;
+
+        foreach (var tier in tiers)
+        {
+            ImGui.PushID($"active-vip-tier-{tier.Id}");
+            ImGui.TextDisabled(tier.Id == venue.DefaultVipTierId ? $"{tier.Name} (default)" : tier.Name);
+            ImGui.Indent();
+
+            var selectedId = venue.GetActiveVipMacroId(tier.Id);
+            if (macros.Count == 0)
+            {
+                ImGui.TextDisabled("No enabled VIP macros.");
+            }
+            else
+            {
+                foreach (var macro in macros)
+                {
+                    var selected = macro.Id == selectedId;
+                    if (ImGui.Selectable($"{macro.Name}##vip-macro-{macro.Id}", selected, ImGuiSelectableFlags.DontClosePopups))
+                    {
+                        venue.SetActiveVipMacroId(tier.Id, macro.Id);
+                        persistence.SaveNow();
+                    }
+                }
+            }
+
+            ImGui.Unindent();
+            ImGui.PopID();
+            if (tier.Id != tiers[^1].Id)
+                ImGui.Separator();
+        }
+
+        ImGui.EndCombo();
+    }
+
     private void EnsureActiveMacroDefaults(VenueProfile venue)
     {
-        foreach (var category in new[] { GreetingCategory.FirstTime, GreetingCategory.Returning, GreetingCategory.Vip })
+        foreach (var category in new[] { GreetingCategory.FirstTime, GreetingCategory.Returning })
         {
             var activeId = venue.GetActiveMacroId(category);
             var macros = venues.GetGreetingProfileForVenue(venue).Macros.Where(m => m.Enabled && m.Category == category).ToList();
             if (activeId == Guid.Empty || macros.All(m => m.Id != activeId))
                 venue.SetActiveMacroId(category, macros.FirstOrDefault()?.Id ?? Guid.Empty);
         }
+
+        venues.RepairVenueData(venue);
     }
 
     private void DrawUngreeted(SessionData session)

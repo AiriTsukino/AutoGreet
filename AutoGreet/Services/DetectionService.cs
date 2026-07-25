@@ -14,8 +14,12 @@ public sealed class DetectionService : IDisposable
     private readonly HashSet<string> present = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> greetingPresent = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<Guid, HashSet<string>> customRegionPresent = new();
+    private readonly Queue<PendingVisitorEvent> pendingVisitorEvents = new();
     private readonly TimeSpan scanInterval = TimeSpan.FromMilliseconds(500);
+    private readonly TimeSpan visitorDispatchInterval = TimeSpan.FromMilliseconds(100);
+    private const int VisitorEventsPerBatch = 4;
     private DateTimeOffset lastScan = DateTimeOffset.MinValue;
+    private DateTimeOffset lastVisitorDispatch = DateTimeOffset.MinValue;
     private bool disposed;
     private bool baselineCaptured;
     private bool wasInDetectionArea;
@@ -46,8 +50,17 @@ public sealed class DetectionService : IDisposable
 
     private void OnFrameworkUpdate(IFramework framework)
     {
-        if (disposed || DateTimeOffset.UtcNow - lastScan < scanInterval) return;
-        lastScan = DateTimeOffset.UtcNow;
+        if (disposed) return;
+
+        var now = DateTimeOffset.UtcNow;
+        if (pendingVisitorEvents.Count > 0 && now - lastVisitorDispatch >= visitorDispatchInterval)
+        {
+            lastVisitorDispatch = now;
+            DispatchPendingVisitorEvents();
+        }
+
+        if (now - lastScan < scanInterval) return;
+        lastScan = now;
         Scan();
     }
 
@@ -136,7 +149,7 @@ public sealed class DetectionService : IDisposable
             baselineCaptured = true;
 
             foreach (var existing in doorbellCurrent)
-                if (VisitorKey.TryParse(existing, out var key)) PlayerPresentOnArrival?.Invoke(key);
+                if (VisitorKey.TryParse(existing, out var key)) QueueVisitorEvent(PendingVisitorEventKind.PresentOnArrival, key);
 
             if (!config.ActiveVenueDisabled)
                 NotifyCustomRegionRouteCurrent(routeCurrent);
@@ -149,7 +162,7 @@ public sealed class DetectionService : IDisposable
         if (importCurrentPlayers || justEnteredDetectionArea)
         {
             foreach (var existing in doorbellCurrent)
-                if (VisitorKey.TryParse(existing, out var key)) PlayerPresentOnArrival?.Invoke(key);
+                if (VisitorKey.TryParse(existing, out var key)) QueueVisitorEvent(PendingVisitorEventKind.PresentOnArrival, key);
 
             if (!config.ActiveVenueDisabled)
                 NotifyCustomRegionRouteCurrent(routeCurrent);
@@ -162,18 +175,18 @@ public sealed class DetectionService : IDisposable
         foreach (var entered in doorbellEntered)
         {
             if (greetingEntered.Contains(entered)) continue;
-            if (VisitorKey.TryParse(entered, out var key)) PlayerDoorbellEntered?.Invoke(key);
+            if (VisitorKey.TryParse(entered, out var key)) QueueVisitorEvent(PendingVisitorEventKind.DoorbellEntered, key);
         }
 
         foreach (var entered in greetingEntered)
-            if (VisitorKey.TryParse(entered, out var key)) PlayerEntered?.Invoke(key);
+            if (VisitorKey.TryParse(entered, out var key)) QueueVisitorEvent(PendingVisitorEventKind.Entered, key);
 
         foreach (var (routeId, enteredKeys) in customRouteEntered)
             foreach (var entered in enteredKeys)
-                if (VisitorKey.TryParse(entered, out var key)) PlayerCustomRegionMacroEntered?.Invoke(key, routeId);
+                if (VisitorKey.TryParse(entered, out var key)) QueueVisitorEvent(PendingVisitorEventKind.CustomRegionEntered, key, routeId);
 
         foreach (var left in present.Except(doorbellCurrent, StringComparer.OrdinalIgnoreCase))
-            if (VisitorKey.TryParse(left, out var key)) PlayerLeft?.Invoke(key);
+            if (VisitorKey.TryParse(left, out var key)) QueueVisitorEvent(PendingVisitorEventKind.Left, key);
 
         present.Clear();
         greetingPresent.Clear();
@@ -189,6 +202,7 @@ public sealed class DetectionService : IDisposable
         present.Clear();
         greetingPresent.Clear();
         customRegionPresent.Clear();
+        pendingVisitorEvents.Clear();
         baselineCaptured = false;
         wasInDetectionArea = false;
     }
@@ -448,10 +462,64 @@ public sealed class DetectionService : IDisposable
             foreach (var keyText in current)
             {
                 if (VisitorKey.TryParse(keyText, out var key))
-                    PlayerCustomRegionMacroEntered?.Invoke(key, routeId);
+                    QueueVisitorEvent(PendingVisitorEventKind.CustomRegionEntered, key, routeId);
             }
         }
     }
+
+    private void QueueVisitorEvent(PendingVisitorEventKind kind, VisitorKey key, Guid routeId = default)
+    {
+        pendingVisitorEvents.Enqueue(new PendingVisitorEvent(kind, key, routeId));
+    }
+
+    private void DispatchPendingVisitorEvents()
+    {
+        var count = Math.Min(VisitorEventsPerBatch, pendingVisitorEvents.Count);
+        for (var i = 0; i < count; i++)
+        {
+            var pending = pendingVisitorEvents.Dequeue();
+
+            try
+            {
+                switch (pending.Kind)
+                {
+                    case PendingVisitorEventKind.PresentOnArrival:
+                        PlayerPresentOnArrival?.Invoke(pending.Visitor);
+                        break;
+                    case PendingVisitorEventKind.DoorbellEntered:
+                        PlayerDoorbellEntered?.Invoke(pending.Visitor);
+                        break;
+                    case PendingVisitorEventKind.Entered:
+                        PlayerEntered?.Invoke(pending.Visitor);
+                        break;
+                    case PendingVisitorEventKind.CustomRegionEntered:
+                        PlayerCustomRegionMacroEntered?.Invoke(pending.Visitor, pending.RouteId);
+                        break;
+                    case PendingVisitorEventKind.Left:
+                        PlayerLeft?.Invoke(pending.Visitor);
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                DalamudServices.Log.Error(ex, "AutoGreet failed while processing a queued visitor event for {Visitor}.", pending.Visitor.Display);
+            }
+        }
+    }
+
+    private enum PendingVisitorEventKind
+    {
+        PresentOnArrival,
+        DoorbellEntered,
+        Entered,
+        CustomRegionEntered,
+        Left,
+    }
+
+    private sealed record PendingVisitorEvent(
+        PendingVisitorEventKind Kind,
+        VisitorKey Visitor,
+        Guid RouteId);
 
     private void ReplaceCustomRegionPresence(Dictionary<Guid, HashSet<string>> routeCurrent)
     {

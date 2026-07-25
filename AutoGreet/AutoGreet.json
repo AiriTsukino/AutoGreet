@@ -1,7 +1,7 @@
 {
   "Author": "Airi Tsukino",
   "Name": "AutoGreet",
-  "AssemblyVersion": "1.0.47.0",
+  "AssemblyVersion": "1.0.51.0",
   "Punchline": "Housing venue visitor queue and greeting assistant.",
   "IconUrl": "https://raw.githubusercontent.com/AiriTsukino/AutoGreet/main/AutoGreet/Resources/AGLogo.png",
   "RepoUrl": "https://github.com/AiriTsukino/AutoGreet",

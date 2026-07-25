@@ -1,5 +1,6 @@
 using System.Threading;
 using AutoGreet.Models;
+using Dalamud.Plugin.Services;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -7,12 +8,16 @@ namespace AutoGreet.Services;
 
 public sealed class PersistenceService : IDisposable
 {
-    private const int StorageVersion = 1;
+    private const int StorageVersion = 2;
     private readonly Configuration configuration;
 
     public List<VenueProfile> Venues { get; private set; } = [];
     public List<CustomDetectionRegion> CustomRegions { get; private set; } = [];
     private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly object saveRequestSync = new();
+    private readonly TimeSpan saveDebounce = TimeSpan.FromMilliseconds(750);
+    private DateTimeOffset saveDueUtc = DateTimeOffset.MaxValue;
+    private bool saveRequested;
     private bool disposed;
 
     public string DataDirectory { get; }
@@ -29,14 +34,28 @@ public sealed class PersistenceService : IDisposable
         this.configuration = configuration;
         DataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "XIVLauncher", "pluginConfigs", "AutoGreet");
         LoadExternalDataOrMigrateLegacy();
+        DalamudServices.Framework.Update += OnFrameworkUpdate;
     }
 
     public void SaveNow()
     {
         if (disposed) return;
+        var entered = false;
         try
         {
-            gate.Wait(1000);
+            entered = gate.Wait(1000);
+            if (!entered)
+            {
+                RequestSave();
+                return;
+            }
+
+            lock (saveRequestSync)
+            {
+                saveRequested = false;
+                saveDueUtc = DateTimeOffset.MaxValue;
+            }
+
             Directory.CreateDirectory(DataDirectory);
             SaveExternalDataUnsafe();
             DalamudServices.PluginInterface.SavePluginConfig(configuration);
@@ -48,8 +67,35 @@ public sealed class PersistenceService : IDisposable
         }
         finally
         {
-            if (gate.CurrentCount == 0) gate.Release();
+            if (entered) gate.Release();
         }
+    }
+
+    public void RequestSave()
+    {
+        if (disposed) return;
+
+        lock (saveRequestSync)
+        {
+            saveRequested = true;
+            saveDueUtc = DateTimeOffset.UtcNow + saveDebounce;
+        }
+    }
+
+    private void OnFrameworkUpdate(IFramework framework)
+    {
+        if (disposed) return;
+
+        lock (saveRequestSync)
+        {
+            if (!saveRequested || DateTimeOffset.UtcNow < saveDueUtc)
+                return;
+
+            saveRequested = false;
+            saveDueUtc = DateTimeOffset.MaxValue;
+        }
+
+        SaveNow();
     }
 
     private void LoadExternalDataOrMigrateLegacy()
@@ -113,6 +159,9 @@ public sealed class PersistenceService : IDisposable
                 ActiveReturningMacroId = record.ActiveReturningMacroId,
                 ActiveVipMacroId = record.ActiveVipMacroId,
                 ActiveBlacklistedMacroId = record.ActiveBlacklistedMacroId,
+                DefaultVipTierId = record.DefaultVipTierId,
+                VipTiers = record.VipTiers ?? [],
+                ActiveVipMacroIdsByTier = record.ActiveVipMacroIdsByTier ?? [],
                 DoorbellRegionId = record.DoorbellRegionId,
                 VisitorListRegionId = record.VisitorListRegionId != Guid.Empty ? record.VisitorListRegionId : record.DoorbellRegionId,
                 FirstTimeGreetingRegionId = record.FirstTimeGreetingRegionId,
@@ -151,6 +200,9 @@ public sealed class PersistenceService : IDisposable
                 ActiveReturningMacroId = v.ActiveReturningMacroId,
                 ActiveVipMacroId = v.ActiveVipMacroId,
                 ActiveBlacklistedMacroId = v.ActiveBlacklistedMacroId,
+                DefaultVipTierId = v.DefaultVipTierId,
+                VipTiers = v.VipTiers,
+                ActiveVipMacroIdsByTier = v.ActiveVipMacroIdsByTier,
                 DoorbellRegionId = v.DoorbellRegionId,
                 VisitorListRegionId = v.VisitorListRegionId,
                 FirstTimeGreetingRegionId = v.FirstTimeGreetingRegionId,
@@ -309,6 +361,7 @@ public sealed class PersistenceService : IDisposable
 
     public void Dispose()
     {
+        DalamudServices.Framework.Update -= OnFrameworkUpdate;
         disposed = true;
         gate.Dispose();
     }
@@ -329,6 +382,9 @@ public sealed class PersistenceService : IDisposable
         public Guid ActiveReturningMacroId { get; set; }
         public Guid ActiveVipMacroId { get; set; }
         public Guid ActiveBlacklistedMacroId { get; set; }
+        public Guid DefaultVipTierId { get; set; }
+        public List<VipTierDefinition> VipTiers { get; set; } = [];
+        public Dictionary<Guid, Guid> ActiveVipMacroIdsByTier { get; set; } = [];
         public Guid DoorbellRegionId { get; set; }
         public Guid VisitorListRegionId { get; set; }
         public Guid FirstTimeGreetingRegionId { get; set; }

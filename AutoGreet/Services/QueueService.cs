@@ -38,19 +38,23 @@ public sealed class QueueService : IDisposable
     {
         var venue = venues.ActiveVenueOrNull;
         if (venue is null) return;
+        var queueCountBefore = venue.Queue.Count;
         foreach (var key in venue.Session.Ungreeted.ToArray())
         {
             if (venue.Blacklist.Contains(key.ToString())) continue;
             if (VenueService.ContainsKey(venue.Session.Greeted, key) || VenueService.ContainsKey(venue.Session.Skipped, key)) continue;
             if (!IsVisitorPresent(venue, key)) continue;
-            Enqueue(key, forceStart);
+            Enqueue(key, forceStart, deferSave: true);
         }
+
+        if (venue.Queue.Count != queueCountBefore)
+            persistence.RequestSave();
 
         if ((forceStart || config.AutoGreetEnabled) && venue.Queue.Any(q => q.Status == QueueEntryStatus.Waiting))
             EnsureWorker(forceStart);
     }
 
-    public void Enqueue(VisitorKey key, bool forceStart = false, bool? allowDetachedCustomGreeting = null)
+    public void Enqueue(VisitorKey key, bool forceStart = false, bool? allowDetachedCustomGreeting = null, bool deferSave = false)
     {
         var venue = venues.ActiveVenueOrNull;
         if (venue is null) return;
@@ -69,7 +73,7 @@ public sealed class QueueService : IDisposable
                 existingActiveEntry.AllowDetachedCustomGreeting = true;
                 existingActiveEntry.StatusText = existingActiveEntry.Status == QueueEntryStatus.Waiting ? "Queued custom venue greeting" : existingActiveEntry.StatusText;
                 logs.Info("Custom venue greeting upgraded", $"Existing main active macro queue entry for {key.Display} was marked as a custom-region greeting, so leaving the region before send will not cancel it.");
-                persistence.SaveNow();
+                SaveQueueChange(deferSave);
             }
 
             if (forceStart) EnsureWorker(true);
@@ -96,7 +100,7 @@ public sealed class QueueService : IDisposable
             AllowDetachedCustomGreeting = newDetachedCustomGreeting,
             StatusText = newDetachedCustomGreeting ? "Queued custom venue greeting" : "Queued"
         });
-        persistence.SaveNow();
+        SaveQueueChange(deferSave);
         EnsureWorker(forceStart);
     }
 
@@ -106,7 +110,7 @@ public sealed class QueueService : IDisposable
             v.Present && string.Equals(v.Key.ToString(), key.ToString(), StringComparison.OrdinalIgnoreCase));
     }
 
-    public void EnqueueCustomRegionMacro(VisitorKey key, Guid routeId, Guid macroId)
+    public void EnqueueCustomRegionMacro(VisitorKey key, Guid routeId, Guid macroId, bool deferSave = false)
     {
         if (!config.AutoGreetEnabled) return;
 
@@ -139,11 +143,11 @@ public sealed class QueueService : IDisposable
             CustomRegionRouteId = routeId,
             StatusText = "Queued custom region macro",
         });
-        persistence.SaveNow();
+        SaveQueueChange(deferSave);
         EnsureWorker(false);
     }
 
-    public void Cancel(VisitorKey key, string reason)
+    public void Cancel(VisitorKey key, string reason, bool deferSave = false)
     {
         var venue = venues.ActiveVenueOrNull;
         if (venue is null) return;
@@ -166,7 +170,15 @@ public sealed class QueueService : IDisposable
             entry.StatusText = reason;
             logs.Info("Queue entry cancelled", $"Queue entry for {key.Display} was cancelled. Reason: {reason}. Route: {(entry.CustomRegionRouteId == Guid.Empty ? "None" : entry.CustomRegionRouteId.ToString())}.");
         }
-        persistence.SaveNow();
+        SaveQueueChange(deferSave);
+    }
+
+    private void SaveQueueChange(bool deferSave)
+    {
+        if (deferSave)
+            persistence.RequestSave();
+        else
+            persistence.SaveNow();
     }
 
 

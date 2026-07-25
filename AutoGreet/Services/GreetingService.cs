@@ -32,6 +32,9 @@ public sealed class GreetingService : IDisposable
         if (venue.Blacklist.Contains(key.ToString())) return null;
         var profile = venues.GetGreetingProfileForVenue(venue);
         var category = GetCategory(key);
+        if (category == GreetingCategory.Vip)
+            return PickVipMacro(venue, profile, key);
+
         var selectedId = venue.GetActiveMacroId(category);
         var selected = selectedId == Guid.Empty
             ? null
@@ -40,6 +43,35 @@ public sealed class GreetingService : IDisposable
         return selected
             ?? profile.Macros.FirstOrDefault(m => m.Enabled && m.Category == category)
             ?? profile.Macros.FirstOrDefault(m => m.Enabled && m.Category == GreetingCategory.FirstTime);
+    }
+
+    private static GreetingMacro? PickVipMacro(VenueProfile venue, GreetingProfile profile, VisitorKey key)
+    {
+        var defaultTierId = venue.GetDefaultVipTier().Id;
+        var visitorTierId = venue.LifetimeVisitors.TryGetValue(key.ToString(), out var visitor)
+                            && venue.GetVipTier(visitor.VipTierId) is not null
+            ? visitor.VipTierId
+            : defaultTierId;
+
+        var selectedIds = new[]
+            {
+                venue.GetActiveVipMacroId(visitorTierId),
+                venue.GetActiveVipMacroId(defaultTierId),
+                venue.ActiveVipMacroId,
+            }
+            .Where(id => id != Guid.Empty)
+            .Distinct();
+
+        foreach (var selectedId in selectedIds)
+        {
+            var selected = profile.Macros.FirstOrDefault(m =>
+                m.Enabled && m.Category == GreetingCategory.Vip && m.Id == selectedId);
+            if (selected is not null)
+                return selected;
+        }
+
+        return profile.Macros.FirstOrDefault(m => m.Enabled && m.Category == GreetingCategory.Vip)
+               ?? profile.Macros.FirstOrDefault(m => m.Enabled && m.Category == GreetingCategory.FirstTime);
     }
 
     public GreetingMacro? PickMacroById(Guid macroId)
@@ -56,7 +88,7 @@ public sealed class GreetingService : IDisposable
         var venue = venues.ActiveVenueOrNull;
         if (venue is null) return GreetingCategory.FirstTime;
         if (venue.Blacklist.Contains(key.ToString())) return GreetingCategory.Blacklisted;
-        if (venue.LifetimeVisitors.TryGetValue(key.ToString(), out var visitor) && visitor.Vip) return GreetingCategory.Vip;
+        if (venue.LifetimeVisitors.TryGetValue(key.ToString(), out var visitor) && (visitor.Vip || visitor.VipTierId != Guid.Empty)) return GreetingCategory.Vip;
         if (venue.LifetimeVisitors.TryGetValue(key.ToString(), out visitor) && visitor.HasBeenGreeted) return GreetingCategory.Returning;
         return GreetingCategory.FirstTime;
     }

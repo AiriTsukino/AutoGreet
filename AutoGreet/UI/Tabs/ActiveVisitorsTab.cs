@@ -63,7 +63,10 @@ internal sealed class ActiveVisitorsTab
                 var state = activeVisitors[i];
                 var key = state.Key;
                 var lifetimeVisitor = venue.LifetimeVisitors.TryGetValue(key.ToString(), out var visitor) ? visitor : null;
-                var isVip = lifetimeVisitor?.Vip == true;
+                var isVip = lifetimeVisitor is not null && (lifetimeVisitor.Vip || lifetimeVisitor.VipTierId != Guid.Empty);
+                var vipTierName = isVip
+                    ? venue.GetVipTier(lifetimeVisitor!.VipTierId)?.Name ?? venue.GetDefaultVipTier().Name
+                    : null;
                 var isBlacklisted = venue.Blacklist.Contains(key.ToString());
                 var isUngreeted = VenueService.ContainsKey(session.Ungreeted, key);
                 var isGreeted = VenueService.ContainsKey(session.Greeted, key);
@@ -76,7 +79,7 @@ internal sealed class ActiveVisitorsTab
                 UiHelpers.VisitorRow(key, present: true, state.ReturningThisSession, state.HereWhenArrived);
 
                 ImGui.TableSetColumnIndex(1);
-                DrawStatus(isVip, isBlacklisted, isUngreeted, isGreeted, isSkipped, state.HereWhenArrived);
+                DrawStatus(vipTierName, isBlacklisted, isUngreeted, isGreeted, isSkipped, state.HereWhenArrived);
 
                 ImGui.TableSetColumnIndex(2);
                 ImGui.TextDisabled(state.LastSeenUtc.LocalDateTime.ToString("g"));
@@ -195,11 +198,11 @@ internal sealed class ActiveVisitorsTab
         if (ImGui.Button(isBlacklisted ? "Unblacklist##active-blacklist" : "Blacklist##active-blacklist", new System.Numerics.Vector2(width, 0))) visitors.ToggleBlacklist(key);
     }
 
-    private static void DrawStatus(bool isVip, bool isBlacklisted, bool isUngreeted, bool isGreeted, bool isSkipped, bool hereWhenArrived)
+    private static void DrawStatus(string? vipTierName, bool isBlacklisted, bool isUngreeted, bool isGreeted, bool isSkipped, bool hereWhenArrived)
     {
         var parts = new List<string>();
         if (isBlacklisted) parts.Add("Blacklisted");
-        if (isVip) parts.Add("VIP");
+        if (!string.IsNullOrWhiteSpace(vipTierName)) parts.Add($"VIP: {vipTierName}");
         if (isUngreeted) parts.Add("Ungreeted");
         else if (isSkipped) parts.Add("Skipped");
         else if (isGreeted) parts.Add(hereWhenArrived ? "Here on arrival" : "Greeted");

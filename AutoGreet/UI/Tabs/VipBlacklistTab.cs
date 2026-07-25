@@ -1,5 +1,6 @@
 using AutoGreet.Models;
 using AutoGreet.Services;
+using AutoGreet.UI.Components;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Game.ClientState.Objects.SubKinds;
 
@@ -11,6 +12,8 @@ public sealed class VipBlacklistTab
     private readonly VisitorService visitors;
     private readonly PersistenceService persistence;
     private Guid editingVenueId = Guid.Empty;
+    private Guid assignmentTierId = Guid.Empty;
+    private string newTierName = "New VIP tier";
     private string manualName = string.Empty;
     private string manualWorld = string.Empty;
     private string status = "Select a player target or type a character name and world.";
@@ -26,16 +29,20 @@ public sealed class VipBlacklistTab
     {
         var venue = GetEditingVenue();
         ImGui.TextColored(new System.Numerics.Vector4(0.65f, 0.85f, 1f, 1f), "VIP and Blacklist Management");
-        ImGui.TextWrapped("VIP visitors use the VIP greeting category. Blacklisted visitors are excluded from tracking, queueing, and greetings.");
+        ImGui.TextWrapped("VIP tiers choose which active VIP macro a visitor receives. Blacklisted visitors are excluded from tracking, queueing, and greetings.");
         ImGui.Spacing();
         DrawVenueSelector(venue);
         ImGui.Separator();
 
+        DrawTierManagement(venue);
+        ImGui.Separator();
+        DrawAssignmentTierSelector(venue);
+        ImGui.Spacing();
         DrawTargetControls(venue);
         ImGui.Spacing();
         DrawManualControls(venue);
         ImGui.Spacing();
-        ImGui.TextDisabled(status);
+        UiHelpers.TextDisabledWrapped(status);
         ImGui.Separator();
 
         if (ImGui.BeginTable("VipBlacklistTables", 2, ImGuiTableFlags.Resizable | ImGuiTableFlags.BordersInnerV))
@@ -73,9 +80,88 @@ public sealed class VipBlacklistTab
             if (ImGui.Selectable($"{venue.Name}##vip-blacklist-venue-{venue.Id}", selected))
             {
                 editingVenueId = venue.Id;
+                assignmentTierId = venue.GetDefaultVipTier().Id;
                 status = $"Editing VIP and blacklist lists for {venue.Name}.";
             }
 
+            if (selected)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        ImGui.EndCombo();
+    }
+
+    private void DrawTierManagement(VenueProfile venue)
+    {
+        if (!ImGui.CollapsingHeader("VIP tiers##vip-tier-management", ImGuiTreeNodeFlags.DefaultOpen))
+            return;
+
+        foreach (var tier in venue.VipTiers.ToArray())
+        {
+            ImGui.PushID($"vip-tier-{venue.Id}-{tier.Id}");
+            var name = tier.Name;
+            ImGui.SetNextItemWidth(240);
+            if (ImGui.InputText("##tier-name", ref name, 64))
+                tier.Name = name;
+            if (ImGui.IsItemDeactivatedAfterEdit())
+            {
+                tier.Name = MakeUniqueTierName(venue, tier.Name, tier.Id);
+                venues.RepairVenueData(venue);
+                persistence.SaveNow();
+            }
+
+            ImGui.SameLine();
+            if (tier.Id == venue.DefaultVipTierId)
+            {
+                ImGui.TextDisabled("Default tier");
+            }
+            else
+            {
+                if (ImGui.SmallButton("Make default"))
+                {
+                    venue.DefaultVipTierId = tier.Id;
+                    venues.RepairVenueData(venue);
+                    persistence.SaveNow();
+                }
+                ImGui.SameLine();
+                if (ImGui.SmallButton("Delete"))
+                    DeleteTier(venue, tier.Id);
+            }
+
+            ImGui.PopID();
+        }
+
+        ImGui.SetNextItemWidth(240);
+        ImGui.InputText("New tier name##new-vip-tier-name", ref newTierName, 64);
+        ImGui.SameLine();
+        if (ImGui.Button("Add tier##add-vip-tier"))
+        {
+            var tier = new VipTierDefinition
+            {
+                Name = MakeUniqueTierName(venue, newTierName),
+            };
+            venue.VipTiers.Add(tier);
+            assignmentTierId = tier.Id;
+            newTierName = "New VIP tier";
+            venues.RepairVenueData(venue);
+            persistence.SaveNow();
+            status = $"Added VIP tier {tier.Name} to {venue.Name}.";
+        }
+    }
+
+    private void DrawAssignmentTierSelector(VenueProfile venue)
+    {
+        var tierId = GetAssignmentTierId(venue);
+        var selectedTier = venue.GetVipTier(tierId) ?? venue.GetDefaultVipTier();
+        ImGui.SetNextItemWidth(260);
+        if (!ImGui.BeginCombo("VIP tier to assign", selectedTier.Name))
+            return;
+
+        foreach (var tier in venue.VipTiers)
+        {
+            var selected = tier.Id == selectedTier.Id;
+            if (ImGui.Selectable($"{tier.Name}##assign-vip-tier-{tier.Id}", selected))
+                assignmentTierId = tier.Id;
             if (selected)
                 ImGui.SetItemDefaultFocus();
         }
@@ -91,7 +177,7 @@ public sealed class VipBlacklistTab
         {
             ImGui.TextDisabled("No player target selected.");
             ImGui.BeginDisabled();
-            ImGui.Button("Set Target as VIP"); ImGui.SameLine();
+            ImGui.Button("Set Target VIP"); ImGui.SameLine();
             ImGui.Button("Unset Target VIP"); ImGui.SameLine();
             ImGui.Button("Blacklist Target"); ImGui.SameLine();
             ImGui.Button("Unblacklist Target");
@@ -100,7 +186,7 @@ public sealed class VipBlacklistTab
         }
 
         ImGui.TextColored(new System.Numerics.Vector4(0.6f, 1f, 0.6f, 1f), key.Value.Display);
-        if (ImGui.Button("Set Target as VIP")) SetVip(venue, key.Value, true);
+        if (ImGui.Button("Set Target VIP")) SetVipTier(venue, key.Value, GetAssignmentTierId(venue));
         ImGui.SameLine();
         if (ImGui.Button("Unset Target VIP")) SetVip(venue, key.Value, false);
         ImGui.SameLine();
@@ -118,7 +204,7 @@ public sealed class VipBlacklistTab
         ImGui.SetNextItemWidth(160);
         ImGui.InputTextWithHint("##ManualWorld", "World, e.g. Kraken", ref manualWorld, 32);
 
-        if (ImGui.Button("Set Manual as VIP")) TryApplyManual(venue, k => SetVip(venue, k, true));
+        if (ImGui.Button("Set Manual VIP")) TryApplyManual(venue, k => SetVipTier(venue, k, GetAssignmentTierId(venue)));
         ImGui.SameLine();
         if (ImGui.Button("Unset Manual VIP")) TryApplyManual(venue, k => SetVip(venue, k, false));
         ImGui.SameLine();
@@ -130,7 +216,7 @@ public sealed class VipBlacklistTab
     private void DrawVipList(VenueProfile venue)
     {
         var vips = venue.LifetimeVisitors.Values
-            .Where(v => v.Vip)
+            .Where(v => v.Vip || v.VipTierId != Guid.Empty)
             .OrderBy(v => v.World, StringComparer.OrdinalIgnoreCase)
             .ThenBy(v => v.CharacterName, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -148,6 +234,7 @@ public sealed class VipBlacklistTab
                 var key = visitor.Key;
                 ImGui.PushID($"vip-{venue.Id}-{key}");
                 ImGui.TextColored(new System.Numerics.Vector4(0.85f, 1f, 0.55f, 1f), key.Display);
+                DrawVisitorTierCombo(venue, visitor);
                 ImGui.SameLine();
                 if (ImGui.SmallButton("Unset VIP")) SetVip(venue, key, false);
                 ImGui.SameLine();
@@ -183,7 +270,7 @@ public sealed class VipBlacklistTab
                 ImGui.SameLine();
                 if (ImGui.SmallButton("Unblacklist")) SetBlacklist(venue, key, false);
                 ImGui.SameLine();
-                if (ImGui.SmallButton("Set VIP")) SetVip(venue, key, true);
+                if (ImGui.SmallButton("Set VIP")) SetVipTier(venue, key, GetAssignmentTierId(venue));
                 ImGui.PopID();
             }
             ImGui.EndChild();
@@ -226,17 +313,86 @@ public sealed class VipBlacklistTab
         return true;
     }
 
+    private Guid GetAssignmentTierId(VenueProfile venue)
+    {
+        if (venue.GetVipTier(assignmentTierId) is null)
+            assignmentTierId = venue.GetDefaultVipTier().Id;
+        return assignmentTierId;
+    }
+
+    private void DrawVisitorTierCombo(VenueProfile venue, Visitor visitor)
+    {
+        var current = venue.GetVipTier(visitor.VipTierId) ?? venue.GetDefaultVipTier();
+        ImGui.SetNextItemWidth(150);
+        if (!ImGui.BeginCombo("##visitor-vip-tier", current.Name))
+            return;
+
+        foreach (var tier in venue.VipTiers)
+        {
+            var selected = tier.Id == current.Id;
+            if (ImGui.Selectable($"{tier.Name}##visitor-tier-{tier.Id}", selected))
+                SetVipTier(venue, visitor.Key, tier.Id);
+            if (selected)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        ImGui.EndCombo();
+    }
+
+    private void DeleteTier(VenueProfile venue, Guid tierId)
+    {
+        if (tierId == Guid.Empty || tierId == venue.DefaultVipTierId)
+            return;
+
+        var tier = venue.GetVipTier(tierId);
+        if (tier is null)
+            return;
+
+        var defaultTier = venue.GetDefaultVipTier();
+        venue.VipTiers.RemoveAll(t => t.Id == tierId);
+        venue.ActiveVipMacroIdsByTier.Remove(tierId);
+        foreach (var visitor in venue.LifetimeVisitors.Values.Where(v => v.VipTierId == tierId))
+        {
+            visitor.Vip = true;
+            visitor.VipTierId = defaultTier.Id;
+        }
+
+        if (assignmentTierId == tierId)
+            assignmentTierId = defaultTier.Id;
+
+        venues.RepairVenueData(venue);
+        persistence.SaveNow();
+        status = $"Deleted VIP tier {tier.Name}. Its visitors now use {defaultTier.Name}.";
+    }
+
+    private static string MakeUniqueTierName(VenueProfile venue, string? requestedName, Guid? currentTierId = null)
+    {
+        var baseName = string.IsNullOrWhiteSpace(requestedName) ? "VIP" : requestedName.Trim();
+        var name = baseName;
+        var suffix = 2;
+        while (venue.VipTiers.Any(t => t.Id != currentTierId && string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase)))
+            name = $"{baseName} ({suffix++})";
+        return name;
+    }
+
     private void SetVip(VenueProfile venue, VisitorKey key, bool isVip)
+        => SetVipTier(venue, key, isVip ? GetAssignmentTierId(venue) : Guid.Empty);
+
+    private void SetVipTier(VenueProfile venue, VisitorKey key, Guid tierId)
     {
         if (!venue.LifetimeVisitors.TryGetValue(key.ToString(), out var visitor))
             visitor = Visitor.FromKey(key);
 
-        visitor.Vip = isVip;
+        var tier = tierId == Guid.Empty ? null : venue.GetVipTier(tierId);
+        visitor.Vip = tier is not null;
+        visitor.VipTierId = tier?.Id ?? Guid.Empty;
         visitor.LastSeenUtc = DateTimeOffset.UtcNow;
         venue.LifetimeVisitors[key.ToString()] = visitor;
         venues.RepairVenueData(venue);
         persistence.SaveNow();
-        status = isVip ? $"Set {key.Display} as VIP for {venue.Name}." : $"Removed VIP status from {key.Display} for {venue.Name}.";
+        status = tier is not null
+            ? $"Set {key.Display} to VIP tier {tier.Name} for {venue.Name}."
+            : $"Removed VIP status from {key.Display} for {venue.Name}.";
     }
 
     private void SetBlacklist(VenueProfile venue, VisitorKey key, bool blacklisted)
